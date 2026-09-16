@@ -1,1 +1,53 @@
-h1 { font-family: Arial, Helvetica, sans-serif; }
+/* 자산배분 리밸런싱 도우미 — 보조 스타일 (대부분 Tailwind CDN 사용) */
+:root {
+  --tone-pos: #16a34a;
+  --tone-neg: #dc2626;
+  --tone-info: #2563eb;
+  --tone-warn: #d97706;
+}
+* { -webkit-tap-highlight-color: transparent; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Pretendard', 'Noto Sans KR', 'Segoe UI', sans-serif; letter-spacing: -0.012em; }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* 비중 막대: 초록=목표충족, 파랑=미달, 빨강=초과 */
+.wbar { height: 10px; display: flex; overflow: hidden; border-radius: 999px; background: #e5e7eb; }
+.wbar > span { display: block; height: 100%; }
+
+/* 카드 */
+.card { border-radius: 14px; }
+@media (max-width: 640px) { .card { border-radius: 12px; } }
+
+/* 스피너 */
+.spin { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* 토스트 */
+.toast-item { animation: slideup 0.22s ease-out; }
+@keyframes slideup { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* 표 스크롤 */
+.tbl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.tbl-wrap table { min-width: 100%; white-space: nowrap; }
+
+/* 조건 행 */
+.cond-row { transition: border-color .15s ease; }
+.cond-row:hover { border-color: #94a3b8; }
+
+/* 입력 공통 */
+input, select, textarea, button { font-family: inherit; }
+.inp { width: 100%; border-radius: 9px; border: 1px solid #cbd5e1; padding: 8px 10px; background: #fff; font-size: 14px; }
+.inp:focus { outline: 2px solid #93c5fd; outline-offset: 0; border-color: #60a5fa; }
+.dark .inp { background: #1e293b; border-color: #334155; color: #e2e8f0; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 10px; padding: 9px 14px; font-weight: 600; font-size: 14px; border: 1px solid transparent; cursor: pointer; transition: .15s ease; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-p { background: #2563eb; color: #fff; }
+.btn-p:hover:not(:disabled) { background: #1d4ed8; }
+.btn-s { background: #fff; color: #0f172a; border-color: #cbd5e1; }
+.btn-s:hover:not(:disabled) { background: #f8fafc; }
+.dark .btn-s { background: #1e293b; color: #e2e8f0; border-color: #334155; }
+.dark .btn-s:hover:not(:disabled) { background: #334155; }
+.btn-d { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+.btn-d:hover:not(:disabled) { background: #fee2e2; }
+
+@media print { .no-print { display: none; } }

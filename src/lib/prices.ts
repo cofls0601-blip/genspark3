@@ -329,6 +329,73 @@ export function detectAnomaly(prices: number[]): { flagged: boolean; change: num
   return { flagged: Math.abs(chg) >= 0.3, change: chg }
 }
 
+/**
+ * 한국 ETF 로컬 사전 — Yahoo 검색 API 가 한글 질의를 거부("Invalid Search Query")하므로
+ * 한글 이름으로는 검색이 불가능하다. 주요 ETF 를 내장해 오프라인에서도 찾을 수 있게 한다.
+ * 형식: [6자리코드, 이름, 별칭(검색어)]
+ */
+export const KR_ETF_DICT: [string, string, string][] = [
+  ['069500', 'KODEX 200', '코덱스200 코스피200 kospi200'],
+  ['102110', 'TIGER 200', '타이거200 코스피200'],
+  ['360750', 'TIGER 미국S&P500', 'S&P500 에스앤피 스팩500 미국s&p'],
+  ['379800', 'KODEX 미국S&P500TR', 'S&P500TR 에스앤피'],
+  ['133690', 'TIGER 미국나스닥100', '나스닥 나스닥100 nasdaq'],
+  ['379810', 'KODEX 미국나스닥100TR', '나스닥100 나스닥'],
+  ['418660', 'TIGER 미국나스닥100레버리지(합성)', '나스닥레버리지 레버리지 나스닥100'],
+  ['245350', 'TIGER 유로스탁스배당30', '유로스탁스 유로 유럽 배당'],
+  ['251350', 'KODEX 선진국MSCI World', 'msci월드 선진국 월드 world'],
+  ['132030', 'KODEX 골드선물(H)', '골드 금 금선물 gold'],
+  ['144600', 'KODEX 은선물(H)', '은 실버 silver'],
+  ['148070', 'KIWOOM 국고채10년', '국고채10년 국고채 채권 키움'],
+  ['153130', 'KODEX 단기채권', '단기채권 채권 단기'],
+  ['114260', 'KODEX 국고채3년', '국고채3년 국고채 채권'],
+  ['152380', 'KODEX 국채선물10년', '국채선물10년 채권'],
+  ['305080', 'TIGER 미국채10년선물', '미국채 미국채권 채권'],
+  ['332620', 'TIGER 미국채30년스트립액티브', '미국채30년 스트립 미국채'],
+  ['261220', 'KODEX WTI원유선물(H)', '원유 wti 기름 oil'],
+  ['130680', 'TIGER 원유선물Enhanced(H)', '원유 wti 기름 oil'],
+  ['117700', 'KODEX 코스닥150', '코스닥 코스닥150'],
+  ['229200', 'KODEX 코스닥150레버리지', '코스닥레버리지 코스닥150 레버리지'],
+  ['233740', 'KODEX 코스닥150선물레버리지', '코스닥 레버리지'],
+  ['091160', 'KODEX 반도체', '반도체 삼성전자 sk하이닉스'],
+  ['091170', 'KODEX 은행', '은행 금융'],
+  ['139260', 'TIGER 200 IT', 'it 기술'],
+  ['157490', 'TIGER 소프트웨어', '소프트웨어 sw'],
+  ['140710', 'KODEX 2차전지산업', '2차전지 배터리 이차전지'],
+  ['305720', 'KODEX 2차전지산업레버리지', '2차전지 레버리지'],
+  ['266390', 'KODEX 미국S&P500선물(H)', 'S&P500선물 미국선물'],
+  ['192090', 'TIGER 차이나CSI300', '중국 차이나 csi300'],
+  ['169950', 'KODEX 차이나A50', '중국 차이나 a50'],
+  ['195980', 'TIGER 신흥국MSCI', '신흥국 이머징 emerging'],
+  ['232350', 'KODEX 인도Nifty50', '인도 니프티 nifty'],
+  ['245710', 'KODEX 베트남VN30', '베트남 vn30'],
+  ['256750', 'KODEX 일본Nikkei225(H)', '일본 니케이 nikkei'],
+  ['195930', 'TIGER 유로스탁스50', '유로스탁스 유럽'],
+  ['168580', 'KODEX 미국S&P500(H)', 'S&P500 미국'],
+  ['381170', 'TIGER 미국테크TOP10 INDXX', '미국테크 테크 top10'],
+  ['371460', 'TIGER 차이나전기차SOLACTIVE', '중국전기차 차이나 전기차'],
+  ['396500', 'TIGER 미국나스닥100커버드콜(합성)', '나스닥 커버드콜 배당'],
+  ['441640', 'KODEX 미국배당커버드콜액티브', '미국배당 커버드콜 배당'],
+  ['458730', 'TIGER 미국배당다우존스', '미국배당 다우존스 schd 배당'],
+  ['453850', 'TIGER 미국배당다우존스타겟데일리커버드콜', '커버드콜 배당'],
+]
+
+/** 한글 이름 부분일치로 로컬 사전 검색 */
+export function searchKrDict(query: string): { ticker: string; name: string; exchange: string }[] {
+  const q = String(query || '').trim().toLowerCase()
+  if (!q) return []
+  const digits = q.replace(/\D/g, '')
+  const hits: { ticker: string; name: string; exchange: string }[] = []
+  for (const [code, name, alias] of KR_ETF_DICT) {
+    const hay = `${code} ${name} ${alias}`.toLowerCase()
+    if (hay.includes(q) || (digits && code.startsWith(digits))) {
+      hits.push({ ticker: code, name, exchange: 'KRX' })
+    }
+    if (hits.length >= 20) break
+  }
+  return hits
+}
+
 /** 미국 종목 검색 (Yahoo search API) */
 export async function searchUsSymbols(query: string): Promise<{ ticker: string; name: string; exchange: string }[]> {
   if (!query) return []

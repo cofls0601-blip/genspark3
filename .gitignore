@@ -31,3 +31,7 @@ lerna-debug.log*
 
 # misc
 .DS_Store
+
+# D1 local state
+.wrangler/
+seed.sql

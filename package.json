@@ -1,17 +1,35 @@
 {
-  "name": "webapp",
+  "name": "asset-rebalance-app",
   "type": "module",
+  "version": "1.0.0",
+  "description": "자산배분 리밸런싱 도우미 — 노코드 전략 규칙 빌더 + Yahoo Finance 단일 데이터 소스 (Hono + Cloudflare Pages + D1)",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "wrangler pages dev",
-    "deploy": "npm run build && wrangler pages deploy",
-    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+    "preview": "wrangler pages dev dist",
+    "dev:sandbox": "npm run build && wrangler pages dev dist --ip 0.0.0.0 --port 3000",
+    "dev:d1": "wrangler pages dev dist --d1=asset-rebalance-app-production --local --ip 0.0.0.0 --port 3000",
+    "deploy": "npm run build && wrangler pages deploy dist",
+    "deploy:prod": "npm run build && wrangler pages deploy dist --project-name asset-rebalance-app",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "typecheck": "tsc --noEmit",
+    "clean-port": "fuser -k 3000/tcp 2>/dev/null || true",
+    "test": "curl -s http://localhost:3000/api/health",
+    "db:migrate:local": "wrangler d1 migrations apply asset-rebalance-app-production --local",
+    "db:migrate:prod": "wrangler d1 migrations apply asset-rebalance-app-production",
+    "db:seed": "wrangler d1 execute asset-rebalance-app-production --local --file=./seed.sql",
+    "db:reset": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local",
+    "db:console:local": "wrangler d1 execute asset-rebalance-app-production --local",
+    "db:console:prod": "wrangler d1 execute asset-rebalance-app-production",
+    "git:commit": "git add -A && git commit -m",
+    "git:status": "git status --short",
+    "git:log": "git log --oneline -10"
   },
   "dependencies": {
     "hono": "^4.13.7"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260916.1",
     "@hono/vite-build": "^1.11.1",
     "@hono/vite-dev-server": "^0.26.1",
     "vite": "^8.1.4",

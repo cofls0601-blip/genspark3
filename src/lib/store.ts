@@ -172,7 +172,6 @@ export function defaultState(): Record<string, any> {
     custom_benchmarks: {},
     price_policy: 'strict',
     price_mode: 'close',
-    specs: specsToSpecJson(),
   }
 }
 
@@ -249,10 +248,12 @@ export async function loadSpecs(env: Bindings): Promise<Record<string, Spec>> {
     return seed
   }
   try {
-    const data = JSON.parse(row.v)
+    let data: any = JSON.parse(row.v)
+    // 과거 버전이 이중 인코딩했을 수 있으므로 한 번 더 시도한다
+    if (typeof data === 'string') data = JSON.parse(data)
     const out: Record<string, Spec> = {}
-    for (const s of data.strategies || []) out[s.code] = s
-    return out
+    for (const s of data?.strategies || []) out[s.code] = s
+    return Object.keys(out).length ? out : specSeed()
   } catch {
     return specSeed()
   }

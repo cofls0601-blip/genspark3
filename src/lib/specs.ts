@@ -45,6 +45,8 @@ export type SignalRow = {
   티커: string
   ETF: string
   role: string
+  /** 조건 판정(노코드 규칙)이 참조하는 시장 구분 */
+  market: 'KR' | 'US'
   종가: number
   SMA10: number | null
   'SMA 위': string // 'YES' | 'NO' | '데이터부족' | '—'
@@ -178,9 +180,13 @@ export const DEFAULT_STRATEGIES: Spec[] = [
  * 규칙 레지스트리 — 새 규칙은 registerRule('이름') 으로 추가하고
  * 스펙에서 rule: '이름' 만 지정하면 된다.
  * ------------------------------------------------------------------------- */
+export type SeriesResolver = (market: string, ticker: string) => { monthly: number[]; daily: number[] }
+
 export type RuleContext = {
   quarter_end: boolean
   trigger_dd: Record<string, number | null>
+  /** 노코드(visual) 규칙이 참조할 가격 시계열 접근자 */
+  series?: SeriesResolver
 }
 
 export type RuleFn = (spec: Spec, vdf: SignalRow[], ctx: RuleContext) => PlanRow[]
