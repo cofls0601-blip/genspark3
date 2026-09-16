@@ -1,34 +1,19 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "webapp",
+  "name": "asset-rebalance-app",
   "compatibility_date": "2026-09-08",
+  "compatibility_flags": ["nodejs_compat"],
   "pages_build_output_dir": "./dist",
-  "compatibility_flags": [
-    "nodejs_compat"
+  // D1: 전략 스펙 / 보유자산 / 히스토리 / 입출금 / 가격캐시 를 모두 담는 단일 저장소.
+  // 배포 전 `npx wrangler d1 create asset-rebalance-app-production` 으로 생성한
+  // database_id 를 아래에 붙여넣어야 한다. (로컬 개발은 --local 로 자동 SQLite)
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "asset-rebalance-app-production",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+    }
   ]
-  // "vars": {
-  //   "MY_VAR": "my-variable"
-  // },
-  // "kv_namespaces": [
-  //   {
-  //     "binding": "MY_KV_NAMESPACE",
-  //     "id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-  //   }
-  // ],
-  // "r2_buckets": [
-  //   {
-  //     "binding": "MY_BUCKET",
-  //     "bucket_name": "my-bucket"
-  //   }
-  // ],
-  // "d1_databases": [
-  //   {
-  //     "binding": "MY_DB",
-  //     "database_name": "my-database",
-  //     "database_id": ""
-  //   }
-  // ],
-  // "ai": {
-  //   "binding": "AI"
-  // }
+  // 주의: kv_namespaces / triggers 는 hosted deploy 에서 거부되므로 사용하지 않는다.
+  //       키-값 상태는 D1 의 kv 테이블에 저장한다.
 }
