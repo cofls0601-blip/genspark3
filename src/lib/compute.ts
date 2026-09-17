@@ -277,6 +277,53 @@ export function betaAlpha(a: EquityPoint[], b: EquityPoint[]): { beta: number | 
   return { beta, alpha: ma - beta * mb }
 }
 
+/** 벤치마크 시계열에서 날짜 dt 이전(<=) 가장 가까운 값을 반환한다 */
+export function benchValueBefore(bench: [string, number][], dt: string): number | null {
+  let best: number | null = null
+  for (const [d, v] of bench) {
+    if (String(d) <= String(dt)) best = n(v)
+    else break
+  }
+  return best
+}
+
+/**
+ * '이 돈을 벤치마크에 넣었다면' 시나리오의 XIRR.
+ * 입출금 스트림을 벤치마크 가격으로 환산한 최종 평가액을 만들고, 원본 입출금과 함께 XIRR 을 계산한다
+ * (공정 비교용). 데이터 부족 시 null.
+ */
+export function benchmarkAttributedXirr(
+  benchRecs: { date: string; value: number }[],
+  cashflows: { date: string; amount: number }[],
+  anchorDay: string,
+): number | null {
+  if (!benchRecs?.length || !cashflows?.length) return null
+  const bench: [string, number][] = [...benchRecs]
+    .map((x) => [String(x.date), n(x.value)] as [string, number])
+    .sort((a, b) => a[0].localeCompare(b[0]))
+  if (!bench.length) return null
+  const bEnd = n(bench[bench.length - 1][1])
+  const bStart = n(bench[0][1])
+  if (bEnd <= 0 || bStart <= 0) return null
+  let total = 0
+  const flowDates: string[] = []
+  for (const f of [...cashflows].sort((a, b) => String(a.date).localeCompare(String(b.date)))) {
+    const amt = n(f.amount)
+    if (amt === 0) continue
+    flowDates.push(f.date)
+    const bv = benchValueBefore(bench, f.date)
+    if (bv && bv > 0) total += amt * (bEnd / bv)
+    else total += amt * (bEnd / bStart)
+  }
+  if (!flowDates.length || total <= 0) return null
+  const endDay = [anchorDay, bench[bench.length - 1][0], ...flowDates].sort().pop()!
+  const eq: EquityPoint[] = [
+    { date: flowDates.slice().sort()[0], value: 1 },
+    { date: endDay, value: total },
+  ]
+  return calcXirr(eq, cashflows)
+}
+
 /** 구글 스프레드시트에 붙여넣을 한 줄 (날짜 + 분류별 금액) */
 export function buildCategoryRow(dateStr: string, byCategory: Record<string, number>): { row: string; leftover: Record<string, number> } {
   const values = [dateStr, ...CATEGORY_ROW_ORDER.map((c) => String(Math.round(n(byCategory?.[c]))))]

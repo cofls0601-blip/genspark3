@@ -261,6 +261,96 @@ crud.put('/custom-benchmarks', async (c) => {
   return ok(c, { custom_benchmarks: clean })
 })
 
+/** 전략 이름 변경 — 전용 규칙(static 이외)이 스펙에 정의된 전략은 코드 변경을 막는다 */
+crud.post('/strategies/:code/rename', async (c) => {
+  const oldCode = c.req.param('code')
+  const body = await readJson<{ new_code?: string }>(c)
+  const newCode = String(body?.new_code || '').trim().toUpperCase()
+  const { env, cfgs, specs, assets } = await loadAll(c)
+  if (!newCode || newCode === oldCode) return fail(c, '변경할 이름을 입력하세요.')
+  const spOld = specs[oldCode]
+  if (spOld && (spOld.rule || 'static') !== 'static') {
+    return fail(c, `${oldCode}는 전용 리밸런싱 규칙(${spOld.rule})이 스펙에 정의되어 있어 이름을 바꿀 수 없습니다. 계좌 별명만 바꿔주세요.`)
+  }
+  if (cfgs.some((x) => x.code === newCode) || specs[newCode]) return fail(c, '이미 존재하는 전략 코드입니다.')
+
+  const nextCfgs = cfgs.map((x) => (x.code === oldCode ? { ...x, code: newCode } : x))
+  if (spOld) {
+    specs[newCode] = { ...spOld, code: newCode }
+    delete specs[oldCode]
+  }
+  const nextAssets = assets.map((a) => (a.strategy === oldCode ? { ...a, strategy: newCode } : a))
+  await persist(c, nextAssets, nextCfgs, specs)
+  return ok(c, { code: newCode, strategies: nextCfgs, specs, assets: nextAssets })
+})
+
+/* ---------------- 검색한 티커 기억 (최근 사용 / 즐겨찾기) ---------------- */
+crud.post('/tickers/recent', async (c) => {
+  const body = await readJson<{ ticker?: string; name?: string; market?: string }>(c)
+  const ticker = String(body?.ticker || '').trim()
+  if (!ticker) return fail(c, 'ticker 가 필요합니다.')
+  const market = body?.market === 'US' ? 'US' : 'KR'
+  const { env, specs } = await loadAll(c)
+  const recents = ((await getState<any[]>(env, 'recent_tickers', specs)) || []).filter(
+    (r) => !(r.ticker === ticker && r.market === market),
+  )
+  recents.unshift({ ticker, name: String(body?.name || ''), market })
+  const next = recents.slice(0, 15)
+  await putState(env, 'recent_tickers', next)
+  return ok(c, { recent_tickers: next })
+})
+
+crud.post('/tickers/favorite', async (c) => {
+  const body = await readJson<{ ticker?: string; name?: string; market?: string }>(c)
+  const ticker = String(body?.ticker || '').trim()
+  if (!ticker) return fail(c, 'ticker 가 필요합니다.')
+  const market = body?.market === 'US' ? 'US' : 'KR'
+  const { env, specs } = await loadAll(c)
+  const favs = (await getState<any[]>(env, 'favorite_tickers', specs)) || []
+  if (!favs.some((f) => f.ticker === ticker && f.market === market)) {
+    favs.push({ ticker, name: String(body?.name || ''), market })
+  }
+  const next = favs.slice(0, 30)
+  await putState(env, 'favorite_tickers', next)
+  return ok(c, { favorite_tickers: next })
+})
+
+crud.delete('/tickers/favorite', async (c) => {
+  const body = await readJson<{ items?: { ticker: string; market: string }[] }>(c)
+  const pairs = new Set((body?.items || []).map((x) => `${x.market}:${x.ticker}`))
+  const { env, specs } = await loadAll(c)
+  const favs = (await getState<any[]>(env, 'favorite_tickers', specs)) || []
+  const next = pairs.size ? favs.filter((f) => !pairs.has(`${f.market}:${f.ticker}`)) : []
+  await putState(env, 'favorite_tickers', next)
+  return ok(c, { favorite_tickers: next })
+})
+
+/** 가격 캐시 비우기 — 종목별 / 전체 */
+crud.post('/cache/clear', async (c) => {
+  const body = await readJson<{ market?: string; ticker?: string }>(c)
+  const { env } = await loadAll(c)
+  const market = body?.market === 'US' ? 'US' : body?.market === 'KR' ? 'KR' : ''
+  const ticker = String(body?.ticker || '').trim()
+  let deleted = 0
+  if (market && ticker) {
+    const r = await env.DB.prepare(`DELETE FROM price_cache WHERE market=? AND ticker=?`).bind(market, ticker).run()
+    deleted = Number((r as any)?.meta?.changes || 0)
+  } else if (ticker) {
+    const r = await env.DB.prepare(`DELETE FROM price_cache WHERE ticker IN (?,?)`).bind(ticker.toUpperCase(), await kr6ish(ticker)).run()
+    deleted = Number((r as any)?.meta?.changes || 0)
+  } else {
+    const r1 = await env.DB.prepare(`DELETE FROM price_cache`).run()
+    const r2 = await env.DB.prepare(`DELETE FROM fx_cache`).run()
+    deleted = Number((r1 as any)?.meta?.changes || 0) + Number((r2 as any)?.meta?.changes || 0)
+  }
+  return ok(c, { deleted, market: market || 'ALL', ticker: ticker || 'ALL' })
+})
+
+function kr6ish(t: string): string {
+  const s = String(t ?? '').trim()
+  return /^\d+$/.test(s) ? s.padStart(6, '0') : s.toUpperCase()
+}
+
 /** 규칙 메타데이터 — 프론트 규칙 빌더가 참조 */
 crud.get('/rule-meta', async (c) => {
   const { specs } = await loadAll(c)

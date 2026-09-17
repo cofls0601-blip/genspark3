@@ -91,7 +91,7 @@ export const DEFAULT_STRATEGIES: Spec[] = [
     active: true,
     annual_limit: 0,
     rule: 'sma_filter_rebalance',
-    params: { sma_roles: ['NASDAQ', 'EuroStoxx'], sma_months: 10, quarter_end_restore: true },
+    params: { sma_tickers: ['133690', '245350'], sma_months: 10, quarter_end_restore: true },
     assets: [
       { ticker: '133690', name: 'TIGER 미국나스닥100', market: 'KR', role: 'NASDAQ', target_pct: 12.5, category: '선진국 주식' },
       { ticker: '245350', name: 'TIGER 유로스탁스배당30', market: 'KR', role: 'EuroStoxx', target_pct: 12.5, category: '선진국 주식' },
@@ -150,7 +150,7 @@ export const DEFAULT_STRATEGIES: Spec[] = [
       threshold: -0.15,
       normal_stock_pct: 70,
       triggered_stock_pct: 85,
-      stock_role: 'S&P500 기준',
+      stock_ticker: '360750',
     },
     assets: [
       { ticker: '360750', name: 'TIGER 미국S&P500', market: 'KR', role: 'S&P500 기준', target_pct: 70, category: '선진국 주식' },
@@ -202,13 +202,24 @@ export const RULE_DESC: Record<string, string> = {
   hold: '보유 유지 — 리밸런싱 없음 (EM형)',
 }
 
+// 설정 화면은 이 메타데이터를 읽어 자동으로 입력칸을 만든다.
+// 전략별 숫자/종목/조건은 specs(스펙 JSON)에만 저장되고, 화면 코드는 전략마다 하드코딩하지 않는다.
 export const RULE_FRIENDLY_NAME: Record<string, string> = {
-  static: '정적 비중 복원',
-  sma_filter_rebalance: 'SMA 필터 + 분기말 복원 (LAA)',
-  momentum_rotate: '모멘텀 로테이션 (GSM)',
-  drawdown_buy: '낙폭 트리거 분할매수 (ISA)',
-  drawdown_shift: '낙폭 트리거 비중 전환 (SSO)',
-  hold: '보유 유지 (EM)',
+  static: '목표비중으로 맞추기',
+  sma_filter_rebalance: '추세(SMA) 필터 + 정기 복원',
+  momentum_rotate: '모멘텀 1등 자산 선택',
+  drawdown_buy: '고점 대비 하락 시 분할매수',
+  drawdown_shift: '고점 대비 하락 시 비중 전환',
+  hold: '장기 보유(자동 리밸런싱 없음)',
+}
+
+/**
+ * 한국 상장코드는 항상 6자리다. 규칙 설정 화면에 사용자가 '69500'처럼 앞자리 0을 빼고
+ * 입력해도 실제 보유 종목 티커('069500')와 매칭되도록 양쪽을 같은 형식으로 맞춘다.
+ */
+export function normTicker(t: any): string {
+  const s = String(t ?? '').trim()
+  return /^\d+$/.test(s) ? s.padStart(6, '0') : s.toUpperCase()
 }
 
 /** 규칙별 사용자 입력 스키마 — 설정 UI 가 이 정의로 입력칸을 자동 생성한다. */
@@ -227,37 +238,75 @@ export type UiField = {
 export const RULE_UI_SCHEMA: Record<string, UiField[]> = {
   static: [],
   sma_filter_rebalance: [
-    { path: ['sma_roles'], label: 'SMA 필터 적용 role (쉼표 구분)', type: 'csv_list', default: ['NASDAQ', 'EuroStoxx'], help: '이 role 의 자산만 SMA 필터를 적용하고, 이탈 시 현금화합니다.' },
-    { path: ['sma_months'], label: 'SMA 개월 수', type: 'int', default: 10, min: 2, max: 24 },
-    { path: ['quarter_end_restore'], label: '분기말에만 목표비중 복원', type: 'bool', default: true, help: '체크하면 분기말(3·6·9·12월)에만 목표비중을 복원합니다.' },
+    {
+      path: ['sma_tickers'],
+      label: 'SMA를 적용할 티커',
+      type: 'csv_list',
+      default: [],
+      help: 'SMA 상회/하회를 볼 실제 보유 종목의 티커를 쉼표로 구분해 입력하세요(이 전략에 이미 들어있는 종목이어야 합니다). 예: 133690, 245350',
+    },
+    { path: ['sma_months'], label: '이동평균 기간(개월)', type: 'int', default: 10, min: 1, max: 60, step: 1 },
+    { path: ['quarter_end_restore'], label: '분기말에 목표비중으로 복원', type: 'bool', default: true },
   ],
   momentum_rotate: [
-    { path: ['sma_qualify'], label: 'SMA 통과 후보만 선정', type: 'bool', default: true },
-    { path: ['winner_share'], label: '1위 종목 투자비중', type: 'fraction_pct', default: 0.8, min: 0, max: 100, help: '% 단위로 입력합니다.' },
-    { path: ['cash_winner_share'], label: '선정 시 현금비중', type: 'fraction_pct', default: 0.2, min: 0, max: 100 },
-    { path: ['cash_no_winner'], label: '전 후보 이탈 시 현금비중', type: 'fraction_pct', default: 1.0, min: 0, max: 100 },
+    { path: ['sma_qualify'], label: 'SMA 통과 자산만 후보로 사용', type: 'bool', default: true },
+    { path: ['winner_share'], label: '1등 자산 투자비중(%)', type: 'fraction_pct', default: 0.8, min: 0, max: 100, step: 1 },
+    { path: ['cash_winner_share'], label: '1등 선정 시 현금비중(%)', type: 'fraction_pct', default: 0.2, min: 0, max: 100, step: 1 },
+    { path: ['cash_no_winner'], label: '통과 자산이 없을 때 현금비중(%)', type: 'fraction_pct', default: 1.0, min: 0, max: 100, step: 1 },
   ],
   drawdown_buy: [
-    { path: ['signal', 'ticker'], label: '신호 티커', type: 'text', default: 'QQQ', help: '고점대비 하락률을 계산할 신호 종목입니다.' },
-    { path: ['signal', 'market'], label: '신호 시장', type: 'select', default: 'US', options: ['US', 'KR'] },
-    { path: ['signal', 'lookback_days'], label: '고점 룩백(거래일)', type: 'int', default: 120, min: 20, max: 500 },
-    { path: ['threshold'], label: '발동 임계 하락률', type: 'fraction_pct', default: -0.1, min: -100, max: 0, help: '예: -10% → -10 입력' },
-    { path: ['buy_fraction'], label: '현금 투입 비율', type: 'fraction_pct', default: 0.5, min: 0, max: 100 },
+    { path: ['signal', 'ticker'], label: '하락률 판단 기준 티커', type: 'text', default: 'QQQ' },
+    { path: ['signal', 'market'], label: '기준 티커 시장', type: 'select', default: 'US', options: ['US', 'KR'] },
+    { path: ['signal', 'lookback_days'], label: '최근 고점 확인 기간(거래일)', type: 'int', default: 120, min: 20, max: 500, step: 5 },
+    { path: ['threshold'], label: '매수 발동 하락률(%)', type: 'fraction_pct', default: -0.1, min: -90, max: 0, step: 1, help: '예: -10 입력 → 최근 고점 대비 -10% 이하에서 발동' },
+    { path: ['buy_fraction'], label: '발동 시 대기현금 투입비중(%)', type: 'fraction_pct', default: 0.5, min: 0, max: 100, step: 5 },
   ],
   drawdown_shift: [
-    { path: ['signal', 'ticker'], label: '신호 티커', type: 'text', default: '360750' },
-    { path: ['signal', 'market'], label: '신호 시장', type: 'select', default: 'KR', options: ['US', 'KR'] },
-    { path: ['signal', 'lookback_days'], label: '고점 룩백(거래일)', type: 'int', default: 120, min: 20, max: 500 },
-    { path: ['threshold'], label: '발동 임계 하락률', type: 'fraction_pct', default: -0.15, min: -100, max: 0 },
-    { path: ['normal_stock_pct'], label: '평시 주식비중', type: 'float', default: 70, min: 0, max: 100 },
-    { path: ['triggered_stock_pct'], label: '발동 시 주식비중', type: 'float', default: 85, min: 0, max: 100 },
-    { path: ['stock_role'], label: '주식 자산의 role', type: 'text', default: 'S&P500 기준' },
+    { path: ['signal', 'ticker'], label: '하락률 판단 기준 티커', type: 'text', default: '360750' },
+    { path: ['signal', 'market'], label: '기준 티커 시장', type: 'select', default: 'KR', options: ['KR', 'US'] },
+    { path: ['signal', 'lookback_days'], label: '최근 고점 확인 기간(거래일)', type: 'int', default: 120, min: 20, max: 500, step: 5 },
+    { path: ['threshold'], label: '비중 전환 발동 하락률(%)', type: 'fraction_pct', default: -0.15, min: -90, max: 0, step: 1 },
+    { path: ['normal_stock_pct'], label: '평상시 주식비중(%)', type: 'float', default: 70, min: 0, max: 100, step: 1 },
+    { path: ['triggered_stock_pct'], label: '발동 시 주식비중(%)', type: 'float', default: 85, min: 0, max: 100, step: 1 },
+    {
+      path: ['stock_ticker'],
+      label: '주식 자산 티커',
+      type: 'text',
+      default: '360750',
+      help: '이 전략에서 주식 역할을 하는 종목의 실제 티커(이미 보유 중인 종목이어야 합니다).',
+    },
   ],
-  hold: [{ path: ['hold_note'], label: '보유 메모', type: 'text', default: '매매 없음(연 1회만 허용)' }],
+  hold: [{ path: ['hold_note'], label: '리밸런싱 메모', type: 'text', default: '매매 없음(연 1회만 허용)' }],
 }
 
 export function registerRule(key: string, fn: RuleFn): void {
   RULE_REGISTRY[key] = fn
+}
+
+/**
+ * 구버전 스펙(예: sma_roles=['NASDAQ'])은 역할명 텍스트로 매칭했는데, 이제는 실제 티커로 매칭한다.
+ * 엔진 자체는 구버전 키도 계속 읽어서(하위호환) 저장 안 해도 안 깨지지만, 화면에 빈 칸으로 보이면
+ * "설정이 사라졌나?" 싶을 수 있어서, 현재 보유 종목의 role 을 역참조해 화면에 보여줄 값만 미리 채운다.
+ * 실제 저장은 여전히 [이 규칙 저장] 을 눌러야 이뤄진다.
+ */
+export function migrateLegacyRoleParams(
+  rule: string,
+  params: Record<string, any>,
+  assets: { strategy: string; ticker: string; role: string }[],
+  code: string,
+): Record<string, any> {
+  const out: Record<string, any> = { ...(params || {}) }
+  const sub = (assets || []).filter((a) => a.strategy === code)
+  if (rule === 'sma_filter_rebalance' && !out.sma_tickers && Array.isArray(out.sma_roles)) {
+    const roles = new Set(out.sma_roles)
+    const tickers = sub.filter((a) => roles.has(a.role)).map((a) => a.ticker)
+    if (tickers.length) out.sma_tickers = tickers
+  }
+  if (rule === 'drawdown_shift' && !out.stock_ticker && out.stock_role) {
+    const match = sub.find((a) => a.role === out.stock_role)
+    if (match) out.stock_ticker = match.ticker
+  }
+  return out
 }
 
 const n = (v: any, d = 0): number => {
@@ -319,12 +368,15 @@ registerRule('sma_filter_rebalance', (spec, vdf, ctx) => {
   const cashCur = cashRow.reduce((a, r) => a + n(r.현재금액), 0)
   const total = laa.reduce((a, r) => a + n(r.현재금액), 0) + cashCur
   let cashPct = cashRow.reduce((a, r) => a + n(r['목표%']), 0)
-  const smaRoles: string[] = params.sma_roles || []
+  // sma_tickers(신규, 실제 티커 매칭)가 있으면 그걸 쓰고, 없으면 구버전 sma_roles(역할명 텍스트 매칭)로
+  // 동작한다 — 전략 규칙 설정 화면에서 다시 저장하기 전까지 기존 설정이 조용히 깨지지 않게 하기 위함.
+  const smaTickers = new Set<string>((params.sma_tickers || []).map((t: any) => normTicker(t)))
+  const smaRolesLegacy: string[] = params.sma_roles || []
   const quarterEnd = !!ctx.quarter_end
   const rows: PlanRow[] = []
 
   for (const r of laa) {
-    const filtered = smaRoles.includes(r.role)
+    const filtered = smaTickers.has(normTicker(r.티커)) || (smaTickers.size === 0 && smaRolesLegacy.includes(r.role))
     const breached = filtered && r['SMA 위'] === 'NO'
     if (breached) cashPct += n(r['목표%'])
     let tgt: number
@@ -443,9 +495,11 @@ registerRule('drawdown_shift', (spec, vdf, ctx) => {
   const threshold = n(params?.threshold, -0.15)
   const triggered = dd !== null && dd !== undefined && Number(dd) <= threshold
   const stockPct = triggered ? n(params?.triggered_stock_pct, 85) : n(params?.normal_stock_pct, 70)
-  const stockRole = params?.stock_role
+  const stockTicker = params?.stock_ticker
+  const stockRoleLegacy = params?.stock_role
   return subAll.map((r) => {
-    const isStock = r.role === stockRole
+    // stock_ticker(신규, 실제 티커 매칭) 우선, 없으면 구버전 stock_role(역할명) 폴백
+    const isStock = stockTicker ? normTicker(r.티커) === normTicker(stockTicker) : r.role === stockRoleLegacy
     const tgt = (total * (isStock ? stockPct : 100 - stockPct)) / 100
     const note = isStock
       ? triggered

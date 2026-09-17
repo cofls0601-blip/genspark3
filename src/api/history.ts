@@ -8,6 +8,7 @@ import {
   buildCategoryRow,
   calcTwr,
   calcXirr,
+  benchmarkAttributedXirr,
   computeCategoryBreakdown,
   computePortfolioSnapshot,
   betaAlpha,
@@ -85,6 +86,27 @@ history.post('/history/snapshot', async (c) => {
   }
   await putState(env, 'benchmarks', allBench)
 
+  // 자동 보조 백업 — 코드 업데이트/실수 초기화 전에 되돌릴 수 있게 최근 30개를 남긴다
+  // (원본 Streamlit 앱의 write_auto_backup() 대응. 실패해도 스냅샷 저장은 막지 않는다)
+  try {
+    const snapshot: Record<string, any> = {}
+    for (const k of ALL_KV_KEYS) snapshot[k] = await getState(env, k, specs)
+    snapshot.specs = await getState(env, 'specs', specs)
+    snapshot.assets = (snapshot.assets || []).map((a: any) => {
+      const copy: Record<string, any> = { ...a }
+      for (const f of PRICE_FIELDS_EXCLUDED_FROM_BACKUP) delete copy[f]
+      return copy
+    })
+    await env.DB.prepare(`INSERT OR REPLACE INTO auto_backup(date, created_at, data) VALUES(?,?,?)`)
+      .bind(date, new Date().toISOString().slice(0, 19).replace('T', ' '), JSON.stringify(snapshot))
+      .run()
+    await env.DB.prepare(
+      `DELETE FROM auto_backup WHERE date NOT IN (SELECT date FROM auto_backup ORDER BY date DESC LIMIT 30)`,
+    ).run()
+  } catch {
+    /* 자동 백업 실패는 무시 */
+  }
+
   return ok(c, { record: rec, history: nextHistory, equity: nextEq, settings })
 })
 
@@ -139,15 +161,30 @@ history.get('/performance', async (c) => {
     const sl = cut ? series.filter((r) => r.date >= cut!) : series
     const p = portfolioPerf(sl)
     const sCf = cashflows.filter((x) => x.strategy === code)
+    const dd = mddDetails(sl)
+    const sor = sortinoRatio(sl)
     return {
       code,
       cagr: p ? p[0] : null,
       mdd: p ? p[1] : null,
+      vol: p ? p[2] : null,
+      sharpe: p ? p[3] : null,
       irr: sCf.length ? calcXirr(sl, sCf) : null,
       twr: calcTwr(sl, sCf),
+      sortino: sor,
+      mddDetail: dd,
       periodReturn: sl.length > 1 && sl[0].value > 0 ? sl[sl.length - 1].value / sl[0].value - 1 : null,
     }
   })
+
+  // 전략 비교 차트용 — 전략별로 시작=100 정규화한 시계열
+  const strategySeries: Record<string, { date: string; value: number }[]> = {}
+  for (const [code, series] of Object.entries(byStratSeries)) {
+    const sl = (cut ? series.filter((r) => r.date >= cut!) : series).slice().sort((a, b) => a.date.localeCompare(b.date))
+    if (!sl.length || !(sl[0].value > 0)) continue
+    const base = sl[0].value
+    strategySeries[code] = sl.map((r) => ({ date: r.date, value: (r.value / base) * 100 }))
+  }
 
   // 벤치마크 시계열 (첫 기록 = 100 정규화)
   const benchAll = (await getState<any[]>(env, 'benchmarks', specs)) || []
@@ -172,6 +209,15 @@ history.get('/performance', async (c) => {
   const betaName = Object.keys(benchSeries)[0]
   const ba = betaName ? betaAlpha(portfolioSeries, benchSeries[betaName]) : { beta: null, alpha: null }
 
+  // '이 돈을 벤치마크에 넣었다면' XIRR (공정 비교용)
+  const attributed: Record<string, number | null> = {}
+  if (irr !== null && last) {
+    for (const [name] of Object.entries(symbols)) {
+      const recs = benchAll.filter((x) => x.name === name).map((x) => ({ date: x.date, value: n(x.value) }))
+      attributed[name] = benchmarkAttributedXirr(recs, cashflows, last)
+    }
+  }
+
   return ok(c, {
     range,
     last,
@@ -189,7 +235,9 @@ history.get('/performance', async (c) => {
       alpha: ba.alpha,
       betaAgainst: betaName || null,
     },
+    attributed,
     strategies: stratPerf,
+    strategySeries,
     benchmarks: benchSeries,
     portfolioSeries,
     history: hist,

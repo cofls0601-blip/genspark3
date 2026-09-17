@@ -4,7 +4,7 @@
 import { Hono } from 'hono'
 import { loadAll, ok, reconcileAssets, type AppEnv } from './helpers'
 import { getState, putState } from '../lib/store'
-import { CATEGORY_OPTIONS, RULE_DESC, RULE_FRIENDLY_NAME, RULE_UI_SCHEMA } from '../lib/specs'
+import { CATEGORY_OPTIONS, RULE_DESC, RULE_FRIENDLY_NAME, RULE_UI_SCHEMA, migrateLegacyRoleParams } from '../lib/specs'
 import { ALLOC_LABEL, INDICATOR_LABEL, DEFAULT_VISUAL_PARAMS, describeCondition } from '../lib/conditions'
 
 export const bootstrap = new Hono<AppEnv>()
@@ -21,6 +21,15 @@ bootstrap.get('/bootstrap', async (c) => {
   const executions = (await getState<any[]>(env, 'executions', specs)) || []
   const categoryTargets = (await getState<Record<string, number>>(env, 'category_targets', specs)) || {}
   const customBenchmarks = (await getState<Record<string, string>>(env, 'custom_benchmarks', specs)) || {}
+  const recentTickers = (await getState<any[]>(env, 'recent_tickers', specs)) || []
+  const favoriteTickers = (await getState<any[]>(env, 'favorite_tickers', specs)) || []
+
+  // 구버전 역할명 기반 파라미터는 화면 표시용으로 실제 티커를 역참조해 미리 채워준다
+  // (엔진은 구버전 키도 계속 읽으므로 저장하지 않아도 동작은 그대로 유지된다).
+  const specsForUi: Record<string, any> = {}
+  for (const [code, sp] of Object.entries(specs)) {
+    specsForUi[code] = { ...sp, params: migrateLegacyRoleParams(sp.rule, sp.params || {}, merged, code) }
+  }
 
   // 히스토리는 목록 표시용으로 가볍게 (composition 은 상세 조회 시 사용)
   const historyLite = history.map((h: any) => ({
@@ -34,7 +43,7 @@ bootstrap.get('/bootstrap', async (c) => {
   }))
 
   return ok(c, {
-    specs,
+    specs: specsForUi,
     strategies: cfgs,
     assets: merged,
     settings,
@@ -44,6 +53,8 @@ bootstrap.get('/bootstrap', async (c) => {
     executions,
     categoryTargets,
     customBenchmarks,
+    recentTickers,
+    favoriteTickers,
     categories: CATEGORY_OPTIONS,
     ruleMeta: { desc: RULE_DESC, friendly: RULE_FRIENDLY_NAME, uiSchema: RULE_UI_SCHEMA },
     visualMeta: {

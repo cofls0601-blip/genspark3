@@ -43,6 +43,12 @@ U.S = {
   showJson: false,
   searched: null,
   restoreText: '',
+  /** 전략 비교 페이지에서 선택한 전략 코드들 */
+  strategyPick: null,
+  /** 자산 편집 실행취소 스택 (스테이징) */
+  undoStack: [],
+  /** 가격 캐시 초기화 UI 상태 */
+  cacheBusy: false,
 }
 
 /* ───────────── 포맷 ───────────── */
@@ -143,6 +149,7 @@ const NAV = [
   { id: 'today', label: '오늘', icon: 'fa-bolt' },
   { id: 'portfolio', label: '포트폴리오', icon: 'fa-chart-pie' },
   { id: 'history', label: '기록·성과', icon: 'fa-clock-rotate-left' },
+  { id: 'compare', label: '전략 비교', icon: 'fa-scale-balanced' },
   { id: 'settings', label: '설정', icon: 'fa-sliders' },
 ]
 

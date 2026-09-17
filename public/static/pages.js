@@ -1108,7 +1108,8 @@
           <div class="font-extrabold flex items-center gap-2"><i class="fas fa-basket-shopping text-blue-600"></i> 자산 목록 · 목표비중</div>
           <div class="text-[12px] mt-0.5 ${Math.abs(sum - 100) < 0.05 ? 'text-green-600' : 'text-amber-600'}">목표비중 합계 ${sum.toFixed(1)}% ${Math.abs(sum - 100) < 0.05 ? '(정상)' : '(100% 로 맞추는 것을 권장)'}</div>
         </div>
-        <div class="flex gap-1.5">
+        <div class="flex gap-1.5 flex-wrap">
+          ${U.btn('<i class="fas fa-rotate-left"></i> 실행취소', 'assetUndo', 'btn-s')}
           ${U.btn('<i class="fas fa-plus"></i> 종목 추가', 'assetAdd', 'btn-s')}
           ${U.btn('<i class="fas fa-magnifying-glass"></i> 종목 검색', 'openSearch', 'btn-s')}
         </div>
@@ -1124,7 +1125,37 @@
           <th class="px-2 py-2"></th>
         </tr></thead><tbody>${rows || '<tr><td colspan="7" class="px-3 py-6 text-center text-slate-500">자산이 없습니다.</td></tr>'}</tbody>
       </table></div>
+      ${quickPickPanel()}
       ${U.S.searched ? searchPanel() : ''}
+    </div>`
+  }
+
+  /** 즐겨찾기 · 최근 사용 티커 빠른 추가 패널 */
+  function quickPickPanel() {
+    const boot = stateOf()
+    const favs = boot.favoriteTickers || []
+    const recents = boot.recentTickers || []
+    if (!favs.length && !recents.length) return ''
+    const chips = (list, mode) =>
+      list
+        .map(
+          (t) => `<span class="inline-flex items-center gap-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 pl-2 pr-1 py-1 text-[12px]">
+          <button class="font-semibold hover:text-blue-600" data-act="quickPick" data-ticker="${esc(t.ticker)}" data-name="${esc(t.name)}" data-market="${esc(t.market)}">${esc(t.name || t.ticker)} <span class="text-slate-400 font-normal">${esc(t.ticker)}</span></button>
+          ${mode === 'fav' ? `<button class="text-slate-400 hover:text-red-600 px-0.5" data-act="favRemove" data-ticker="${esc(t.ticker)}" data-market="${esc(t.market)}" title="즐겨찾기 해제"><i class="fas fa-xmark"></i></button>` : ''}
+        </span>`,
+        )
+        .join(' ')
+    return `<div class="border-t border-slate-200 dark:border-slate-800 p-3 space-y-2">
+      ${
+        favs.length
+          ? `<div><div class="text-[11.5px] font-semibold text-slate-500 mb-1.5"><i class="fas fa-star text-amber-500 mr-1"></i> 즐겨찾기</div><div class="flex flex-wrap gap-1.5">${chips(favs, 'fav')}</div></div>`
+          : ''
+      }
+      ${
+        recents.length
+          ? `<div><div class="text-[11.5px] font-semibold text-slate-500 mb-1.5"><i class="fas fa-clock-rotate-left mr-1"></i> 최근 사용</div><div class="flex flex-wrap gap-1.5">${chips(recents.slice(0, 10), 'recent')}</div></div>`
+          : ''
+      }
     </div>`
   }
 
@@ -1281,6 +1312,16 @@
             .join('\n'),
         )}</textarea>
         <div class="mt-2">${U.btn('<i class="fas fa-floppy-disk"></i> 벤치마크 저장', 'saveCustomBench', 'btn-p')}</div>
+      </div>
+      <div class="px-4 pb-4 border-t border-slate-100 dark:border-slate-800 pt-3">
+        <div class="text-[12px] font-semibold text-slate-600 dark:text-slate-300 mb-1">가격 캐시</div>
+        <div class="text-[11.5px] text-slate-500 mb-2">캐시된 가격을 비우면 다음 계산 때 Yahoo 에서 다시 받아옵니다. 최신 시세가 반영되지 않을 때 사용하세요.</div>
+        <div class="flex flex-wrap gap-1.5 items-center">
+          <input id="cache-ticker" class="inp !w-auto !py-1.5 !text-[12.5px]" placeholder="티커 (예: 133690)" />
+          ${sel([{ v: 'KR', t: '한국' }, { v: 'US', t: '미국' }], 'KR', 'noop', 'id="cache-market" data-act="noop"')}
+          ${U.btn('<i class="fas fa-broom"></i> 이 종목 캐시 삭제', 'clearCacheOne', 'btn-s')}
+          ${U.btn('<i class="fas fa-trash-can"></i> 전체 캐시 삭제', 'clearCacheAll', 'btn-d')}
+        </div>
       </div>
     </div>`
   }
@@ -1618,16 +1659,36 @@
     U.render()
   }
   ACTIONS.searchPick = (e, el) => {
+    pushUndo()
+    const s = U.S.searched
     U.S.ruleDraft.assets.push({
       ticker: el.dataset.ticker,
       name: el.dataset.name,
-      market: U.S.searched.market,
+      market: s.market,
       role: '',
       target_pct: 0,
-      category: U.S.searched.market === 'US' ? '선진국 주식' : '기타',
+      category: s.market === 'US' ? '선진국 주식' : '기타',
     })
+    // 최근 사용 목록에 기록 (실패해도 추가 자체는 유지)
+    U.api.post('/api/tickers/recent', { ticker: el.dataset.ticker, name: el.dataset.name, market: s.market }).then((r) => {
+      U.S.boot.recentTickers = r.recent_tickers
+    }).catch(() => {})
     U.toast(`“${el.dataset.name}” 을(를) 추가했습니다. 목표%를 입력하세요.`)
     U.render()
+  }
+
+  /** 검색 결과에서 바로 즐겨찾기 추가 */
+  ACTIONS.searchFav = async (e, el) => {
+    const { ticker, name } = el.dataset
+    const market = U.S.searched.market
+    try {
+      const r = await U.api.post('/api/tickers/favorite', { ticker, name, market })
+      U.S.boot.favoriteTickers = r.favorite_tickers
+      U.toast(`“${name}” 을(를) 즐겨찾기에 추가했습니다.`)
+      U.render()
+    } catch (err) {
+      U.toast(err.message, 'err')
+    }
   }
 
   /* 전체 설정 */
@@ -1665,6 +1726,257 @@
       const r = await U.api.put('/api/custom-benchmarks', obj)
       U.S.boot.customBenchmarks = r.custom_benchmarks
       U.toast('벤치마크를 저장했습니다.')
+      U.render()
+    } catch (err) {
+      U.toast(err.message, 'err')
+    }
+  }
+
+  /* ═══════════════════════════ 전략 비교 ═══════════════════════════ */
+  PAGES.compare = function () {
+    const boot = stateOf()
+    const perf = U.S.perf
+    const hist = (boot.history || []).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)))
+
+    const rangeBar = `<div class="flex gap-1.5 mb-4 overflow-x-auto pb-0.5">${RANGES.map(
+      (r) =>
+        `<button class="btn ${U.S.perfRange === r.id ? 'btn-p' : 'btn-s'} !py-1.5 !px-3 !text-[12px]" data-act="setRange" data-range="${r.id}">${r.label}</button>`,
+    ).join('')}</div>`
+
+    const head = U.sectionTitle(
+      '전략 비교',
+      '전략과 벤치마크를 같은 시작점(100)으로 정규화해 성과를 나란히 비교합니다.',
+    )
+
+    if (!hist.length) {
+      return (
+        head +
+        rangeBar +
+        U.empty('아직 총자산 히스토리가 없습니다. [오늘] 탭에서 “기록 저장”을 눌러 스냅샷을 쌓아주세요.')
+      )
+    }
+    if (!perf) return head + rangeBar + loadingBox('성과 지표를 계산하는 중입니다…')
+
+    const m = perf.metrics || {}
+    const metricsCard = `<div class="card bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm mb-4">
+      <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 flex-wrap">
+        <div class="font-extrabold flex items-center gap-2"><i class="fas fa-gauge-high text-blue-600"></i> 전체 성과</div>
+        <div class="flex gap-1.5">
+          ${U.btn('<i class="fas fa-arrows-rotate"></i> 새로고침', 'perfRefresh', 'btn-s')}
+          ${U.btn('<i class="fas fa-ruler-combined"></i> 벤치마크 백필', 'benchBackfill', 'btn-s')}
+        </div>
+      </div>
+      <div class="p-4">
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-4">
+          ${U.metric('CAGR', pctOrDash(m.cagr), '연환산 수익률', n(m.cagr) >= 0 ? 'pos' : 'neg')}
+          ${U.metric('MDD', pctOrDash(m.mdd), m.mddDetail?.ddLen != null ? `하락기간 ${m.mddDetail.ddLen}일` : '', 'neg')}
+          ${U.metric('IRR/XIRR', pctOrDash(m.irr), '실제 돈의 성장', n(m.irr) >= 0 ? 'pos' : 'neg')}
+          ${U.metric('TWR', pctOrDash(m.twr), '입출금 효과 제거', n(m.twr) >= 0 ? 'pos' : 'neg')}
+        </div>
+        <div class="text-[12px] text-slate-500 dark:text-slate-400 mb-3">XIRR 은 실제 돈의 성장(입출금 시점 반영), TWR 은 투자 결정의 성과(입출금 효과 제거)입니다. 둘을 함께 보세요.</div>
+        <div class="tbl-wrap">${lineChart(
+          [
+            { name: '내 포트폴리오', points: perf.portfolioSeries || [] },
+            ...Object.entries(perf.benchmarks || {}).map(([name, pts]) => ({ name, points: pts })),
+          ],
+          { height: 200 },
+        )}</div>
+      </div>
+    </div>`
+
+    const series = perf.strategySeries || {}
+    const codes = Object.keys(series)
+    if (!U.S.strategyPick) U.S.strategyPick = codes.slice(0, 3)
+    const picked = (U.S.strategyPick || []).filter((c) => codes.includes(c))
+
+    const picker = codes.length
+      ? `<div class="flex flex-wrap gap-1.5 mb-3">${codes
+          .map((c) => {
+            const on = picked.includes(c)
+            return `<button class="px-3 py-1.5 rounded-lg text-[12px] font-semibold border ${
+              on
+                ? 'bg-blue-600 text-white border-blue-600'
+                : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700'
+            }" data-act="pickStratCmp" data-code="${esc(c)}">${esc(c)}</button>`
+          })
+          .join('')}</div>`
+      : ''
+
+    const combined = {}
+    for (const c of picked) combined[c] = series[c]
+    for (const [name, pts] of Object.entries(perf.benchmarks || {})) combined[name] = pts
+
+    const stratTable = picked.length
+      ? `<div class="tbl-wrap"><table class="w-full text-[13px]"><thead class="bg-slate-50 dark:bg-slate-800/50 text-slate-500"><tr>
+          <th class="text-left px-3 py-2 font-semibold">전략</th>
+          <th class="text-right px-3 py-2 font-semibold">기간수익</th>
+          <th class="text-right px-3 py-2 font-semibold">CAGR</th>
+          <th class="text-right px-3 py-2 font-semibold">MDD</th>
+          <th class="text-right px-3 py-2 font-semibold">IRR</th>
+          <th class="text-right px-3 py-2 font-semibold">TWR</th>
+        </tr></thead><tbody>${picked
+          .map((c) => {
+            const s = (perf.strategies || []).find((x) => x.code === c) || {}
+            const rel = s.periodReturn != null && m.periodReturnBase != null ? null : null
+            void rel
+            return `<tr class="border-t border-slate-100 dark:border-slate-800">
+              <td class="px-3 py-2 font-semibold">${esc(strategyTitle(c))}</td>
+              <td class="px-3 py-2 text-right tnum ${n(s.periodReturn) >= 0 ? 'text-green-600' : 'text-red-600'}">${pctOrDash(s.periodReturn)}</td>
+              <td class="px-3 py-2 text-right tnum">${pctOrDash(s.cagr)}</td>
+              <td class="px-3 py-2 text-right tnum text-red-600">${pctOrDash(s.mdd)}</td>
+              <td class="px-3 py-2 text-right tnum">${s.irr != null ? pctOrDash(s.irr) : '<span class="text-slate-400">(태그 없음)</span>'}</td>
+              <td class="px-3 py-2 text-right tnum">${pctOrDash(s.twr)}</td>
+            </tr>`
+          })
+          .join('')}</tbody></table></div>`
+      : '<div class="p-6 text-center text-sm text-slate-500">비교할 전략을 위에서 선택하세요.</div>'
+
+    const stratCard = `<div class="card bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm mb-4">
+      <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-800">
+        <div class="font-extrabold flex items-center gap-2"><i class="fas fa-scale-balanced text-blue-600"></i> 전략별 성과 비교</div>
+        <div class="text-[12px] text-slate-500 dark:text-slate-400 mt-0.5">전략을 같은 시작점(100)으로 정규화해 비교합니다(위에서 고른 구간 적용).</div>
+      </div>
+      <div class="p-4">
+        ${picker}
+        ${Object.keys(combined).length ? `<div class="tbl-wrap">${lineChart(Object.entries(combined).map(([name, points]) => ({ name, points })), { height: 200 })}</div>` : ''}
+        <div class="mt-3">${stratTable}</div>
+      </div>
+    </div>`
+
+    const attr = perf.attributed || {}
+    const attrEntries = Object.entries(attr).filter(([, v]) => v !== null && v !== undefined)
+    const attrCard = attrEntries.length
+      ? `<div class="card bg-blue-50/60 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 p-4 mb-4">
+          <div class="font-bold text-[13px] text-blue-800 dark:text-blue-300 mb-2"><i class="fas fa-lightbulb mr-1"></i> 같은 돈을 벤치마크에 넣었다면?</div>
+          <ul class="space-y-1">${attrEntries
+            .map(
+              ([name, v]) =>
+                `<li class="text-[12.5px] text-blue-900 dark:text-blue-200 tnum">· 동일 입출금을 <b>${esc(name)}</b>에 넣었다면 XIRR ≈ <b>${pctOrDash(v)}</b></li>`,
+            )
+            .join('')}</ul>
+          <div class="text-[12px] text-blue-800/80 dark:text-blue-300/80 mt-2">내 XIRR ${pctOrDash(m.irr)} 와 비교해보세요.</div>
+        </div>`
+      : ''
+
+    return head + rangeBar + metricsCard + attrCard + stratCard
+  }
+
+  ACTIONS.pickStratCmp = (e, el) => {
+    const code = el.dataset.code
+    const cur = U.S.strategyPick || []
+    U.S.strategyPick = cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]
+    U.render()
+  }
+
+  /* ───── 즐겨찾기 / 최근 사용 티커 ───── */
+  ACTIONS.favStar = async (e, el) => {
+    const { ticker, name, market } = el.dataset
+    try {
+      const r = await U.api.post('/api/tickers/favorite', { ticker, name, market })
+      U.S.boot.favoriteTickers = r.favorite_tickers
+      U.toast(`“${name}” 을(를) 즐겨찾기에 추가했습니다.`)
+      U.render()
+    } catch (err) {
+      U.toast(err.message, 'err')
+    }
+  }
+
+  ACTIONS.favRemove = async (e, el) => {
+    const { ticker, market } = el.dataset
+    try {
+      const r = await U.api.del('/api/tickers/favorite', { items: [{ ticker, market }] })
+      U.S.boot.favoriteTickers = r.favorite_tickers
+      U.toast('즐겨찾기에서 제거했습니다.')
+      U.render()
+    } catch (err) {
+      U.toast(err.message, 'err')
+    }
+  }
+
+  ACTIONS.quickPick = (e, el) => {
+    const { ticker, name, market } = el.dataset
+    U.S.ruleDraft.assets.push({
+      ticker,
+      name,
+      market,
+      role: '',
+      target_pct: 0,
+      category: market === 'US' ? '선진국 주식' : '기타',
+    })
+    U.toast(`“${name}” 을(를) 추가했습니다. 목표%를 입력하세요.`)
+    U.render()
+  }
+
+  /* ───── 자산 편집 실행취소 (스테이징) ───── */
+  ACTIONS.assetUndo = () => {
+    const stack = U.S.undoStack || []
+    if (!stack.length) return U.toast('되돌릴 변경이 없습니다.', 'warn')
+    U.S.ruleDraft.assets = JSON.parse(stack.pop())
+    U.toast('마지막 변경을 되돌렸습니다.')
+    U.render()
+  }
+
+  /* ───── 가격 캐시 초기화 ───── */
+  function pushUndo() {
+    U.S.undoStack = U.S.undoStack || []
+    U.S.undoStack.push(JSON.stringify(U.S.ruleDraft.assets))
+    if (U.S.undoStack.length > 20) U.S.undoStack.shift()
+  }
+  U.pushUndo = pushUndo
+
+  ACTIONS.clearCacheTicker = async (e, el) => {
+    const { ticker, market } = el.dataset
+    if (!window.confirm(`${ticker} 의 캐시된 가격을 삭제할까요? 다음 계산 때 다시 받아옵니다.`)) return
+    el.disabled = true
+    try {
+      const r = await U.api.post('/api/cache/clear', { ticker, market })
+      U.toast(`${ticker} 캐시 ${r.deleted}건을 삭제했습니다.`)
+      U.render()
+    } catch (err) {
+      U.toast(err.message, 'err')
+      el.disabled = false
+    }
+  }
+
+  ACTIONS.clearCacheAll = async () => {
+    if (!window.confirm('모든 가격·환율 캐시를 삭제할까요? 다음 계산 때 Yahoo 에서 다시 받아옵니다.')) return
+    try {
+      const r = await U.api.post('/api/cache/clear', {})
+      U.toast(`가격 캐시 ${r.deleted}건을 삭제했습니다.`)
+      U.render()
+    } catch (err) {
+      U.toast(err.message, 'err')
+    }
+  }
+
+  ACTIONS.clearCacheOne = async () => {
+    const tEl = document.getElementById('cache-ticker')
+    const mEl = document.getElementById('cache-market')
+    const ticker = String(tEl ? tEl.value : '').trim()
+    const market = mEl ? mEl.value : 'KR'
+    if (!ticker) return U.toast('티커를 입력하세요.', 'warn')
+    try {
+      const r = await U.api.post('/api/cache/clear', { ticker, market })
+      U.toast(`${ticker} 캐시 ${r.deleted}건을 삭제했습니다.`)
+      if (tEl) tEl.value = ''
+      U.render()
+    } catch (err) {
+      U.toast(err.message, 'err')
+    }
+  }
+
+  ACTIONS.noop = () => {}
+
+  ACTIONS.stratRename = async (e, el) => {
+    const oldCode = el.dataset.code
+    const next = window.prompt(`${oldCode} 의 새 전략 코드를 입력하세요 (영문/숫자)`, oldCode)
+    if (next === null) return
+    try {
+      const r = await U.api.post(`/api/strategies/${encodeURIComponent(oldCode)}/rename`, { new_code: next })
+      U.S.editingCode = r.code
+      U.S.ruleDraft = null
+      U.S.boot = await U.api.get('/api/bootstrap')
+      U.toast(`전략 코드를 ${oldCode} → ${r.code} 로 변경했습니다.`)
       U.render()
     } catch (err) {
       U.toast(err.message, 'err')

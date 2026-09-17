@@ -43,10 +43,16 @@ export const ALL_KV_KEYS = [
   'strategies',
   'category_targets',
   'executions',
+  'account_cash',
   'custom_benchmarks',
   'price_policy',
   'price_mode',
+  'recent_tickers',
+  'favorite_tickers',
 ] as const
+
+/** 검색으로 추가한 종목 기록 (최근 사용 / 즐겨찾기) */
+export type TickerRef = { ticker: string; name: string; market: 'KR' | 'US' }
 
 export type KvKey = (typeof ALL_KV_KEYS)[number]
 
@@ -90,6 +96,8 @@ export async function initDb(env: Bindings): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_price_cache_lookup ON price_cache (market, ticker, date)`,
     `CREATE TABLE IF NOT EXISTS fx_cache (date TEXT PRIMARY KEY, rate REAL, source TEXT)`,
     `CREATE TABLE IF NOT EXISTS kv_quarantine (k TEXT, raw TEXT, reason TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)`,
+    // 스냅샷 저장 시 자동으로 남기는 보조 백업 (최근 30개 유지) — 원본의 write_auto_backup 대응
+    `CREATE TABLE IF NOT EXISTS auto_backup (date TEXT PRIMARY KEY, created_at TEXT, data TEXT)`,
   ]
   for (const sql of stmts) {
     try {
@@ -169,9 +177,12 @@ export function defaultState(): Record<string, any> {
     strategies: specsToConfigs(specs),
     category_targets: Object.fromEntries(CATEGORY_OPTIONS.map((c) => [c, 0])),
     executions: [],
+    account_cash: {},
     custom_benchmarks: {},
     price_policy: 'strict',
     price_mode: 'close',
+    recent_tickers: [],
+    favorite_tickers: [],
   }
 }
 
@@ -191,10 +202,13 @@ const DEFAULT_MAP: Record<string, any> = {
   cashflows: [],
   benchmarks: [],
   executions: [],
+  account_cash: {},
   custom_benchmarks: {},
   category_targets: Object.fromEntries(CATEGORY_OPTIONS.map((c) => [c, 0])),
   price_policy: 'strict',
   price_mode: 'close',
+  recent_tickers: [],
+  favorite_tickers: [],
 }
 
 function fallbackFor(k: string, specs: Record<string, Spec>): any {
