@@ -10,7 +10,8 @@
 
 | 구분 | 주소 |
 |---|---|
-| 프로덕션 | (배포 후 기입 — 아래 "배포 상태" 참고) |
+| 프로덕션 | https://asset-rebalance-app.pages.dev |
+| 최신 배포 | https://2f9e8718.asset-rebalance-app.pages.dev |
 | 로컬 개발 | http://localhost:3000 |
 | GitHub | (미연결) |
 
@@ -147,19 +148,34 @@ curl http://localhost:3000/api/health
 
 ## 배포 상태
 
-- **상태**: ⏳ 로컬 검증 완료 · **프로덕션 배포 대기**
-- **Genspark 관리형(`gsk`)**: 현재 **무료 플랜 차단** (`free_plan_block`, 크레딧 500+ 또는 유료 플랜 필요)
-- **본인 Cloudflare 계정(BYOK)**: Deploy 패널의 API 토큰만 준비되면 즉시 가능
+- **상태**: ✅ **프로덕션 배포 완료 (본인 Cloudflare 계정 / Cloudflare Pages)**
+- **프로덕션 URL**: https://asset-rebalance-app.pages.dev
+- **Pages 프로젝트**: `asset-rebalance-app` (production branch `main`)
+- **D1 데이터베이스**: `asset-rebalance-app-production`
+  (`database_id` = `bde23563-ef44-4228-ae1d-2c5cff0a402c`, 바인딩 `DB`)
+- **마이그레이션**: `0001_init.sql`, `0002_auto_backup.sql` 적용 완료 (2026-09-19)
+- **초기 상태 주입**: 2026-08-28 자산 스냅샷 반영 완료
+  (보유자산 31건 · 전략 8개 · 히스토리/평가금액 1건 · 벤치마크 8건)
 
-### 본인 Cloudflare 계정으로 옮기는 방법
-코드는 두 경로가 동일하며, **`database_id` 한 곳만 교체**하면 됩니다.
+### 재배포 / 운영 명령
 
 ```bash
-npx wrangler d1 create asset-rebalance-app-production   # 출력된 database_id 복사
-# wrangler.jsonc 의 database_id 값 교체
-npx wrangler d1 migrations apply asset-rebalance-app-production   # 프로덕션 마이그레이션
-npm run deploy:prod
+# 코드 수정 후 재배포
+cd /home/user/webapp
+npm run build
+npx wrangler pages deploy dist --project-name asset-rebalance-app --branch main
+
+# 프로덕션 D1 마이그레이션 (새 마이그레이션 추가 시)
+npx wrangler d1 migrations apply asset-rebalance-app-production --remote
+
+# 프로덕션 D1 상태 백업/복원
+curl -s https://asset-rebalance-app.pages.dev/api/backup > backup.json
+curl -s -X POST https://asset-rebalance-app.pages.dev/api/restore \
+  -H 'Content-Type: application/json' --data @backup.json
 ```
+
+> `main.<project>.pages.dev` 별칭은 이 프로젝트에서 404 를 반환하므로
+> **루트 도메인(`https://asset-rebalance-app.pages.dev`)** 을 사용하세요.
 
 ## 아직 구현하지 않은 것 (다음 단계 후보)
 

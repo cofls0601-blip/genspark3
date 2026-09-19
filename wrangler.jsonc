@@ -11,7 +11,7 @@
     {
       "binding": "DB",
       "database_name": "asset-rebalance-app-production",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID"
+      "database_id": "bde23563-ef44-4228-ae1d-2c5cff0a402c"
     }
   ]
   // 주의: kv_namespaces / triggers 는 hosted deploy 에서 거부되므로 사용하지 않는다.
