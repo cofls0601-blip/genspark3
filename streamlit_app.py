@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from streamlit_app.data import ReadOnlySheetsStore, StoreError, build_month_exports
+from streamlit_app.data import ReadOnlySheetsStore, StoreError, build_month_exports, load_local_holdings, load_local_strategies
 from streamlit_app.engine import build_action_plan, enrich_prices, portfolio_view
 
 
@@ -27,13 +27,16 @@ st.caption("Google Sheets는 읽기 전용으로 사용하고, 월말 리밸런�
 
 try:
     store = get_store()
-except StoreError as exc:
-    st.error(str(exc))
-    st.info("README의 읽기 전용 Google Sheets 연결 절차를 확인하세요.")
-    st.stop()
+except StoreError:
+    store = None
 
-holdings = store.read("Holdings")
-strategies = store.read("Strategies")
+if "holdings" not in st.session_state:
+    st.session_state.holdings = load_local_holdings()
+if "strategies" not in st.session_state:
+    st.session_state.strategies = load_local_strategies()
+
+holdings = st.session_state.holdings.copy()
+strategies = st.session_state.strategies.copy()
 
 with st.sidebar:
     st.header("월말 기준")
@@ -55,8 +58,8 @@ plan = build_action_plan(view, strategies, as_of)
 for warning in st.session_state.get("price_warnings", []):
     st.warning(warning)
 
-tab_dashboard, tab_plan, tab_holdings, tab_history = st.tabs(
-    ["대시보드", "액션 플랜", "보유내역", "월별 기록"]
+tab_dashboard, tab_plan, tab_holdings, tab_strategies, tab_history = st.tabs(
+    ["대시보드", "액션 플랜", "보유내역", "전략 설정", "월별 기록"]
 )
 
 with tab_dashboard:
@@ -145,7 +148,11 @@ with tab_holdings:
             "shares": st.column_config.NumberColumn(min_value=0.0, format="%.4f"),
         },
     )
-    st.info("읽기 전용 모드입니다. 보유수량 변경은 Google Sheets의 Holdings 시트에서 직접 수정하세요.")
+    if st.button("보유내역 변경 적용", type="primary", use_container_width=True):
+        st.session_state.holdings = edited.copy()
+        st.session_state.pop("priced_holdings", None)
+        st.success("현재 앱 세션에 보유내역을 적용했습니다. 아래 TSV를 Google Sheets에 붙여넣어 보관하세요.")
+        st.rerun()
     edited_tsv = edited.to_csv(sep="\t", index=False)
     st.download_button(
         "편집한 보유내역 TSV 다운로드",
@@ -155,10 +162,47 @@ with tab_holdings:
         use_container_width=True,
     )
 
+with tab_strategies:
+    st.subheader("전략 내용 · 규칙 편집")
+    st.caption("전략 규칙과 파라미터를 웹앱에서 직접 수정합니다. params_json은 JSON 형식입니다.")
+    strategy_cols = ["code", "rule", "params_json", "active"]
+    edited_strategies = st.data_editor(
+        strategies[strategy_cols],
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "rule": st.column_config.SelectboxColumn(
+                options=["static", "hold", "sma_filter_rebalance", "momentum_rotate", "drawdown_buy", "drawdown_shift"]
+            ),
+            "active": st.column_config.CheckboxColumn(),
+        },
+    )
+    if st.button("전략 변경 적용", type="primary", use_container_width=True):
+        try:
+            for raw in edited_strategies["params_json"].fillna("{}"):
+                __import__("json").loads(str(raw) or "{}")
+        except Exception as exc:
+            st.error(f"params_json 형식을 확인하세요: {exc}")
+        else:
+            st.session_state.strategies = edited_strategies.copy()
+            st.success("현재 앱 세션에 전략 설정을 적용했습니다.")
+            st.rerun()
+
+    strategies_tsv = edited_strategies.to_csv(sep="\t", index=False)
+    st.download_button(
+        "Strategies TSV 다운로드",
+        data=strategies_tsv.encode("utf-8-sig"),
+        file_name="strategies_edited.tsv",
+        mime="text/tab-separated-values",
+        use_container_width=True,
+    )
+    st.text_area("Strategies 복사용", value=strategies_tsv, height=180)
+
 with tab_history:
     st.subheader("월별 스냅샷")
-    snapshots = store.read_optional("Snapshots")
-    actions = store.read_optional("Actions")
+    snapshots = store.read_optional("Snapshots") if store else pd.DataFrame()
+    actions = store.read_optional("Actions") if store else pd.DataFrame()
     if snapshots.empty:
         st.caption("Snapshots 시트가 없거나 공개되지 않았습니다.")
     else:
