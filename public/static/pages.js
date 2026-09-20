@@ -19,6 +19,15 @@
   }
   const specOf = (code) => (stateOf().specs || {})[code] || null
 
+  /** 이 전략이 종목별 목표% 입력을 쓰는지 (규칙이 비중을 정하면 false) */
+  const weightMetaFor = (code) => (stateOf().weightMeta || {})[code] || { usage: 'asset', usesWeights: true, note: '' }
+
+  /** 종목을 추가했을 때의 안내 — 비중을 쓰지 않는 전략은 목표% 입력을 요구하지 않는다 */
+  const addedToast = (name) =>
+    weightMetaFor(U.S.ruleDraft && U.S.ruleDraft.code).usesWeights
+      ? `“${name}” 을(를) 추가했습니다. 목표%를 입력한 뒤 [변경 저장] 을 누르세요.`
+      : `“${name}” 을(를) 추가했습니다. [변경 저장] 을 누르면 반영됩니다.`
+
   const warnBanner = () => {
     const w = plan()?.warnings || []
     if (!w.length) return ''
@@ -282,6 +291,8 @@
         const share = total > 0 ? (st / total) * 100 : 0
         const spec = specOf(cfg.code)
         const ruleName = (boot.ruleMeta?.friendly || {})[spec?.rule] || spec?.rule || '—'
+        const wmOf = weightMetaFor(cfg.code)
+        const uw = wmOf.usesWeights !== false
         return `<div class="card bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm mb-3 overflow-hidden">
           <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-start justify-between gap-2 flex-wrap">
             <div>
@@ -302,7 +313,7 @@
                   <th class="text-right px-3 py-2 font-semibold">현재가</th>
                   <th class="text-right px-3 py-2 font-semibold">평가액</th>
                   <th class="text-right px-3 py-2 font-semibold">비중</th>
-                  <th class="text-right px-3 py-2 font-semibold">목표</th>
+                  <th class="text-right px-3 py-2 font-semibold">${uw ? '목표' : '비중 결정'}</th>
                 </tr>
               </thead>
               <tbody>
@@ -324,8 +335,12 @@
                       <td class="px-3 py-2 text-right tnum font-semibold">${esc(U.won(v))}</td>
                       <td class="px-3 py-2 text-right tnum">${cur.toFixed(1)}%</td>
                       <td class="px-3 py-2 text-right tnum whitespace-nowrap">
-                        ${tgt.toFixed(1)}%
-                        ${tgt > 0 || cur > 0 ? `<div class="${Math.abs(diff) < 2 ? 'text-green-600' : Math.abs(diff) < 5 ? 'text-amber-600' : 'text-red-600'}">${U.pctPt(diff)}</div>` : ''}
+                        ${
+                          uw
+                            ? `${tgt.toFixed(1)}%
+                        ${tgt > 0 || cur > 0 ? `<div class="${Math.abs(diff) < 2 ? 'text-green-600' : Math.abs(diff) < 5 ? 'text-amber-600' : 'text-red-600'}">${U.pctPt(diff)}</div>` : ''}`
+                            : `<span class="text-slate-400 text-[11.5px]" title="${esc(wmOf.note || '')}">규칙</span>`
+                        }
                       </td>
                     </tr>`
                   })
@@ -334,7 +349,11 @@
             </table>
           </div>
           <div class="px-4 py-2.5 bg-slate-50 dark:bg-slate-800/40 text-[12px] text-slate-500 dark:text-slate-400 flex items-center justify-between gap-2 flex-wrap">
-            <span>합계 <b class="tnum text-slate-700 dark:text-slate-200">${esc(U.won(st))}</b> · 목표비중 합 ${sub.reduce((s, a) => s + n(a.target_pct), 0).toFixed(1)}%</span>
+            <span>합계 <b class="tnum text-slate-700 dark:text-slate-200">${esc(U.won(st))}</b> ${
+              uw
+                ? `· 목표비중 합 ${sub.reduce((s, a) => s + n(a.target_pct), 0).toFixed(1)}%`
+                : `· <span class="text-blue-600 dark:text-blue-400">규칙이 비중을 정합니다</span>`
+            }</span>
             <button class="underline decoration-dotted hover:text-blue-600" data-act="goSettings" data-code="${esc(cfg.code)}">규칙 편집 →</button>
           </div>
         </div>`
@@ -1088,6 +1107,8 @@
   /* ---------- 자산 목록 편집 ---------- */
   function assetEditor(d) {
     const cats = stateOf().categories || []
+    const wm = weightMetaFor(d.code)
+    const usesWeights = wm.usesWeights !== false
     const sum = d.assets.reduce((s, a) => s + n(a.target_pct), 0)
     const rows = d.assets
       .map(
@@ -1097,7 +1118,11 @@
         <td class="px-2 py-2">${sel([{ v: 'KR', t: 'KR' }, { v: 'US', t: 'US' }], a.market || 'KR', 'assetField', `data-idx="${i}" data-field="market"`)}</td>
         <td class="px-2 py-2"><input class="inp !py-1.5 !text-[12.5px] min-w-[110px]" value="${esc(a.role || '')}" data-oninput="assetField" data-idx="${i}" data-field="role" /></td>
         <td class="px-2 py-2">${sel(cats.map((c) => ({ v: c, t: c })), a.category || '기타', 'assetField', `data-idx="${i}" data-field="category"`)}</td>
-        <td class="px-2 py-2"><input type="number" step="0.1" class="inp !py-1.5 !text-[12.5px] !w-20 text-right" value="${n(a.target_pct)}" data-oninput="assetPct" data-idx="${i}" /></td>
+        <td class="px-2 py-2 text-right">${
+          usesWeights
+            ? `<input type="number" step="0.1" class="inp !py-1.5 !text-[12.5px] !w-20 text-right" value="${n(a.target_pct)}" data-oninput="assetPct" data-idx="${i}" />`
+            : `<span class="text-slate-400" title="이 전략은 규칙이 비중을 정합니다">—</span>`
+        }</td>
         <td class="px-2 py-2 text-right"><button class="btn btn-d !py-1 !px-2 !text-[12px]" data-act="assetDel" data-idx="${i}"><i class="fas fa-trash"></i></button></td>
       </tr>`,
       )
@@ -1105,10 +1130,15 @@
     return `<div class="card bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm mb-3">
       <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 flex-wrap">
         <div>
-          <div class="font-extrabold flex items-center gap-2"><i class="fas fa-basket-shopping text-blue-600"></i> 자산 목록 · 목표비중</div>
-          <div class="text-[12px] mt-0.5 ${Math.abs(sum - 100) < 0.05 ? 'text-green-600' : 'text-amber-600'}">목표비중 합계 ${sum.toFixed(1)}% ${Math.abs(sum - 100) < 0.05 ? '(정상)' : '(100% 로 맞추는 것을 권장)'}</div>
+          <div class="font-extrabold flex items-center gap-2"><i class="fas fa-basket-shopping text-blue-600"></i> 자산 목록${usesWeights ? ' · 목표비중' : ''}</div>
+          <div class="text-[12px] mt-0.5 ${usesWeights ? (Math.abs(sum - 100) < 0.05 ? 'text-green-600' : 'text-amber-600') : 'text-slate-500 dark:text-slate-400'}">${
+            usesWeights
+              ? `목표비중 합계 ${sum.toFixed(1)}% ${Math.abs(sum - 100) < 0.05 ? '(정상)' : '(100% 로 맞추는 것을 권장)'}`
+              : esc(wm.note || '이 전략은 규칙이 비중을 정합니다.')
+          }</div>
         </div>
-        <div class="flex gap-1.5 flex-wrap">
+        <div class="flex gap-1.5 flex-wrap items-center">
+          ${U.btn('<i class="fas fa-floppy-disk"></i> 변경 저장', 'assetSave', 'btn-p !py-1.5')}
           ${U.btn('<i class="fas fa-rotate-left"></i> 실행취소', 'assetUndo', 'btn-s')}
           ${U.btn('<i class="fas fa-plus"></i> 종목 추가', 'assetAdd', 'btn-s')}
           ${U.btn('<i class="fas fa-magnifying-glass"></i> 종목 검색', 'openSearch', 'btn-s')}
@@ -1121,10 +1151,19 @@
           <th class="text-left px-2 py-2 font-semibold">시장</th>
           <th class="text-left px-2 py-2 font-semibold">역할(role)</th>
           <th class="text-left px-2 py-2 font-semibold">자산군</th>
-          <th class="text-right px-2 py-2 font-semibold">목표%</th>
+          <th class="text-right px-2 py-2 font-semibold">${usesWeights ? '목표%' : '비중'}</th>
           <th class="px-2 py-2"></th>
         </tr></thead><tbody>${rows || '<tr><td colspan="7" class="px-3 py-6 text-center text-slate-500">자산이 없습니다.</td></tr>'}</tbody>
       </table></div>
+      <div class="px-4 py-2.5 bg-slate-50 dark:bg-slate-800/40 border-t border-slate-200 dark:border-slate-800 text-[12px] ${
+        usesWeights ? 'text-slate-500 dark:text-slate-400' : 'text-blue-700 dark:text-blue-300'
+      }">
+        <i class="fas fa-circle-info mr-1"></i>${
+          usesWeights
+            ? '종목·목표%를 수정한 뒤 <b>[변경 저장]</b> 을 누르면 보유수량은 그대로 둔 채 목록이 반영됩니다.'
+            : `${esc(wm.note || '이 전략은 규칙이 비중을 정합니다.')} 종목 구성만 수정하고 <b>[변경 저장]</b> 을 누르세요.`
+        }
+      </div>
       ${quickPickPanel()}
       ${U.S.searched ? searchPanel() : ''}
     </div>`
@@ -1551,10 +1590,13 @@
     U.render()
   }
 
-  /* 저장 */
-  ACTIONS.saveSpec = async (e, el) => {
+  /* 저장 — 규칙/스펙 저장과 자산 목록 저장이 같은 경로를 쓴다.
+     서버는 spec.assets 를 원본으로 보고 보유수량·가격만 기존 행에서 이어받으므로,
+     종목 삭제·목표% 수정이 그대로 반영되고 보유수량은 유실되지 않는다. */
+  async function saveDraft(el, message) {
     const d = U.S.ruleDraft
-    el.disabled = true
+    if (!d) return
+    if (el) el.disabled = true
     try {
       const assets = d.assets.map((a) => ({
         ticker: String(a.ticker || ''),
@@ -1564,20 +1606,28 @@
         target_pct: n(a.target_pct),
         category: a.category || '기타',
       }))
-      const r = await U.api.put(`/api/specs/${encodeURIComponent(d.code)}`, {
+      await U.api.put(`/api/specs/${encodeURIComponent(d.code)}`, {
         rule: d.rule,
         params: d.params,
         description: d.description,
         assets,
       })
       U.S.boot = await U.api.get('/api/bootstrap')
-      U.toast(`전략 ${d.code} 규칙을 저장했습니다.`)
+      // 저장된 내용을 서버 상태에서 다시 읽도록 초안을 버린다 (삭제한 종목이 남지 않도록)
+      U.S.ruleDraft = null
+      U.S.undoStack = []
+      U.toast(message)
       await U.refreshPlan(true)
     } catch (err) {
       U.toast(err.message, 'err')
-      el.disabled = false
+      if (el) el.disabled = false
     }
   }
+
+  ACTIONS.saveSpec = (e, el) => saveDraft(el, `전략 ${U.S.ruleDraft ? U.S.ruleDraft.code : ''} 규칙을 저장했습니다.`)
+
+  /* 자산 목록 · 목표비중 저장 */
+  ACTIONS.assetSave = (e, el) => saveDraft(el, '자산 목록을 저장했습니다. 보유수량은 그대로 유지됩니다.')
 
   /* 전략 기본정보 */
   ACTIONS.stratAccount = (e, el) => {
@@ -1673,7 +1723,7 @@
     U.api.post('/api/tickers/recent', { ticker: el.dataset.ticker, name: el.dataset.name, market: s.market }).then((r) => {
       U.S.boot.recentTickers = r.recent_tickers
     }).catch(() => {})
-    U.toast(`“${el.dataset.name}” 을(를) 추가했습니다. 목표%를 입력하세요.`)
+    U.toast(addedToast(el.dataset.name))
     U.render()
   }
 
@@ -1903,7 +1953,7 @@
       target_pct: 0,
       category: market === 'US' ? '선진국 주식' : '기타',
     })
-    U.toast(`“${name}” 을(를) 추가했습니다. 목표%를 입력하세요.`)
+    U.toast(addedToast(name))
     U.render()
   }
 

@@ -11,9 +11,9 @@
 | 구분 | 주소 |
 |---|---|
 | 프로덕션 | https://asset-rebalance-app.pages.dev |
-| 최신 배포 | https://2f9e8718.asset-rebalance-app.pages.dev |
+| 최신 배포 | https://d992d3ab.asset-rebalance-app.pages.dev |
 | 로컬 개발 | http://localhost:3000 |
-| GitHub | (미연결) |
+| GitHub | https://github.com/cofls0601-blip/genspark3 |
 
 ## 주요 기능
 
@@ -59,8 +59,27 @@
 ### 5. 설정
 - 전략 추가/삭제/순서변경/활성화
 - 규칙 파라미터(내장 6개 규칙은 자동 생성 폼, 신규는 노코드 빌더)
+- **자산 목록 · 목표비중 편집 + `[변경 저장]` 버튼** (규칙 카드와 자산 카드에서 각각 저장)
 - 자산 목록 편집 + 한국/미국 종목 검색
 - 휴장일 정책 · 가격 기준(종가/수정종가) · 자산군 목표비중 · 벤치마크
+
+#### 비중을 규칙이 정하는 전략 (중요)
+전략마다 목표비중을 **입력해야 하는지**가 다릅니다. 이 정보는 `/api/bootstrap` 의
+`weightMeta` 로 내려가고, UI 는 이를 읽어 입력칸을 숨기거나 안내 문구로 대체합니다.
+
+| 규칙 | 비중을 누가 정하나 | UI 동작 |
+|---|---|---|
+| `static` | 자산별 목표% | 목표% 입력칸 표시 + 합계 100% 경고 |
+| `sma_filter_rebalance` | 자산별 목표% | 동일 |
+| `visual` | `on_pass`/`on_fail` 이 `target` 일 때만 | 조건에 따라 자동 판단 |
+| `momentum_rotate` | 규칙(모멘텀 1위 + 현금비중) | `규칙` 배지, 목표% 숨김 |
+| `drawdown_buy` | 규칙(발동 시 현금 → 주식) | `규칙` 배지 |
+| `drawdown_shift` | 규칙(발동 시 주식 바스켓 % 로 재조정) | `규칙` 배지 |
+| `hold` | 비중 변경 없음 | `매매 없음` |
+
+> 규칙이 비중을 정하는 전략에 목표% 를 억지로 입력하게 만들면, 엔진이 그 값을 읽지
+> 않아 **아무 일도 일어나지 않는 매매 항목**이 to-do 리스트에 쌓입니다. 그래서 해당
+> 전략은 목표% 입력을 요구하지 않습니다.
 
 ## API 경로
 
@@ -190,4 +209,7 @@ curl -s -X POST https://asset-rebalance-app.pages.dev/api/restore \
 
 | 날짜 | 내용 |
 |---|---|
+| 2026-09-20 | **비중을 규칙이 정하는 전략 지원** — `weightMeta`(usage/usesWeights/note) 를 `/api/bootstrap` 으로 노출, 목표% 입력칸·합계 경고 숨김. `momentum_rotate` 데이터부족 종목 전량 현금화 버그 수정(보유 유지), `drawdown_shift` 발동 전 매매 제거 + 발동 시 주식 바스켓 비례 재조정. **자산 목록·목표비중 `[변경 저장]` 버튼 추가**(`ACTIONS.assetSave`), 규칙 저장과 공용 `saveDraft` 로 통합 |
+| 2026-09-20 | **자산 저장 버그 근본 수정** — `reconcileAssets` 를 spec-first 로 재작성. 기존에는 스펙 자산을 *추가만* 하고 `target_pct` 수정·삭제를 무시해 저장이 안 되는 것처럼 보였음. 이제 보유수량(`shares`/`close`/`prices`/`adjclose`)은 유지한 채 수정·삭제 반영 |
+| 2026-09-19 | 본인 Cloudflare 계정(Cloudflare Pages) 프로덕션 배포. 2026-08-28 자산 스냅샷 D1 주입(보유자산 31건 · 전략 8개 · 벤치마크 8건) |
 | 2026-09-16 | Streamlit → Cloudflare 이식 1차 완료. 노코드 규칙 빌더, Yahoo 단일 소스, D1 저장 계층, 성과 지표 포팅 |

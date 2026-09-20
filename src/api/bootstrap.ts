@@ -4,7 +4,14 @@
 import { Hono } from 'hono'
 import { loadAll, ok, reconcileAssets, type AppEnv } from './helpers'
 import { getState, putState } from '../lib/store'
-import { CATEGORY_OPTIONS, RULE_DESC, RULE_FRIENDLY_NAME, RULE_UI_SCHEMA, migrateLegacyRoleParams } from '../lib/specs'
+import {
+  CATEGORY_OPTIONS,
+  RULE_DESC,
+  RULE_FRIENDLY_NAME,
+  RULE_UI_SCHEMA,
+  migrateLegacyRoleParams,
+  weightMetaOf,
+} from '../lib/specs'
 import { ALLOC_LABEL, INDICATOR_LABEL, DEFAULT_VISUAL_PARAMS, describeCondition } from '../lib/conditions'
 
 export const bootstrap = new Hono<AppEnv>()
@@ -57,6 +64,8 @@ bootstrap.get('/bootstrap', async (c) => {
     favoriteTickers,
     categories: CATEGORY_OPTIONS,
     ruleMeta: { desc: RULE_DESC, friendly: RULE_FRIENDLY_NAME, uiSchema: RULE_UI_SCHEMA },
+    // 전략별 '종목별 목표% 입력이 필요한가' — 설정 UI 의 입력칸 표시와 검증에 쓴다.
+    weightMeta: weightMetaOf(specs),
     visualMeta: {
       indicators: INDICATOR_LABEL,
       allocModes: ALLOC_LABEL,

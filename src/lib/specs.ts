@@ -202,6 +202,68 @@ export const RULE_DESC: Record<string, string> = {
   hold: '보유 유지 — 리밸런싱 없음 (EM형)',
 }
 
+/**
+ * 규칙별 '종목별 목표비중(target_pct) 입력이 필요한가' 메타데이터.
+ *  - 'asset' : 종목별 목표% 를 실제로 사용한다 → 설정 화면에서 입력받고 합계 100% 를 검증한다.
+ *  - 'rule'  : 비중은 규칙 파라미터가 결정한다(예: GSM 1위 80%/현금 20%, SSO 70→85%)
+ *              → 종목별 목표% 는 쓰지 않으므로 입력을 요구하지 않고 할 일 목록에도 반영하지 않는다.
+ *  - 'none'  : 목표비중 개념이 없다(장기 보유) → 매매 계획을 만들지 않는다.
+ */
+export const RULE_WEIGHT_USAGE: Record<string, 'asset' | 'rule' | 'none'> = {
+  static: 'asset',
+  sma_filter_rebalance: 'asset',
+  visual: 'asset', // on_pass/on_fail 이 'target' 일 때만 실제 사용 (ruleUsesAssetWeights 참고)
+  momentum_rotate: 'rule',
+  drawdown_buy: 'rule',
+  drawdown_shift: 'rule',
+  hold: 'none',
+}
+
+/** 설정 화면에 표시할 규칙별 비중 안내 문구 */
+export const RULE_WEIGHT_NOTE: Record<string, string> = {
+  static: '종목별 목표% 를 입력하면 그 비중으로 맞춥니다.',
+  sma_filter_rebalance: '종목별 목표% 를 입력하면 SMA 이탈 종목을 현금화하고 분기말에 복원합니다.',
+  visual: '조건 충족 시 동작이 “목표비중으로 복원”일 때만 종목별 목표% 를 사용합니다.',
+  momentum_rotate: '비중은 규칙이 정합니다(1위 자산 80% / 현금 20%). 종목별 목표% 는 쓰지 않습니다.',
+  drawdown_buy: '비중은 규칙이 정합니다(트리거 발동 시 대기현금의 50% 매수). 종목별 목표% 는 쓰지 않습니다.',
+  drawdown_shift: '비중은 규칙이 정합니다(발동 시 주식 비중 상향). 종목별 목표% 는 쓰지 않습니다.',
+  hold: '장기 보유 전략입니다. 매매 계획을 만들지 않아 할 일 목록에 나타나지 않습니다.',
+}
+
+/**
+ * 이 규칙(스펙)이 종목별 목표% 를 실제로 쓰는지 판정한다.
+ * 노코드(visual) 규칙은 '목표비중으로 복원' 동작을 쓸 때만 비중이 필요하다.
+ */
+export function ruleUsesAssetWeights(rule: string, params?: Record<string, any> | null): boolean {
+  const basis = RULE_WEIGHT_USAGE[rule] || 'asset'
+  if (basis !== 'asset') return false
+  if (rule === 'visual') {
+    const p = params || {}
+    return p.on_pass === 'target' || p.on_fail === 'target'
+  }
+  return true
+}
+
+/**
+ * 전략별 비중 사용 메타데이터를 한 번에 만든다 (설정 UI 가 그대로 소비).
+ *  - usesWeights: 종목별 목표% 입력칸을 보여줄지 여부
+ *  - note: 이 전략의 비중이 어떻게 정해지는지 안내 문구
+ */
+export function weightMetaOf(
+  specs: Record<string, Spec>,
+): Record<string, { usage: 'asset' | 'rule' | 'none'; usesWeights: boolean; note: string }> {
+  const out: Record<string, { usage: 'asset' | 'rule' | 'none'; usesWeights: boolean; note: string }> = {}
+  for (const [code, sp] of Object.entries(specs || {})) {
+    const rule = sp?.rule || 'static'
+    out[code] = {
+      usage: RULE_WEIGHT_USAGE[rule] || 'asset',
+      usesWeights: ruleUsesAssetWeights(rule, sp?.params),
+      note: RULE_WEIGHT_NOTE[rule] || '',
+    }
+  }
+  return out
+}
+
 // 설정 화면은 이 메타데이터를 읽어 자동으로 입력칸을 만든다.
 // 전략별 숫자/종목/조건은 specs(스펙 JSON)에만 저장되고, 화면 코드는 전략마다 하드코딩하지 않는다.
 export const RULE_FRIENDLY_NAME: Record<string, string> = {
@@ -266,14 +328,25 @@ export const RULE_UI_SCHEMA: Record<string, UiField[]> = {
     { path: ['signal', 'market'], label: '기준 티커 시장', type: 'select', default: 'KR', options: ['KR', 'US'] },
     { path: ['signal', 'lookback_days'], label: '최근 고점 확인 기간(거래일)', type: 'int', default: 120, min: 20, max: 500, step: 5 },
     { path: ['threshold'], label: '비중 전환 발동 하락률(%)', type: 'fraction_pct', default: -0.15, min: -90, max: 0, step: 1 },
-    { path: ['normal_stock_pct'], label: '평상시 주식비중(%)', type: 'float', default: 70, min: 0, max: 100, step: 1 },
-    { path: ['triggered_stock_pct'], label: '발동 시 주식비중(%)', type: 'float', default: 85, min: 0, max: 100, step: 1 },
     {
-      path: ['stock_ticker'],
-      label: '주식 자산 티커',
-      type: 'text',
-      default: '360750',
-      help: '이 전략에서 주식 역할을 하는 종목의 실제 티커(이미 보유 중인 종목이어야 합니다).',
+      path: ['normal_stock_pct'],
+      label: '평상시 주식비중(%)',
+      type: 'float',
+      default: 70,
+      min: 0,
+      max: 100,
+      step: 1,
+      help: '발동 전에는 매매하지 않습니다. 안내 문구용 기준값입니다.',
+    },
+    {
+      path: ['triggered_stock_pct'],
+      label: '발동 시 주식비중(%)',
+      type: 'float',
+      default: 85,
+      min: 0,
+      max: 100,
+      step: 1,
+      help: '트리거가 발동하면 주식 바스켓을 이 비중으로 올리고 현금을 줄입니다.',
     },
   ],
   hold: [{ path: ['hold_note'], label: '리밸런싱 메모', type: 'text', default: '매매 없음(연 1회만 허용)' }],
@@ -425,25 +498,53 @@ registerRule('momentum_rotate', (spec, vdf) => {
   const gsm = subAll.filter((r) => r.티커 !== 'CASH')
   const cashCur = subAll.filter((r) => r.티커 === 'CASH').reduce((a, r) => a + n(r.현재금액), 0)
   const total = gsm.reduce((a, r) => a + n(r.현재금액), 0) + cashCur
-  const passing = gsm
+
+  // SMA/12M 신호를 계산할 수 없는 후보는 판정 자체가 불가능하다.
+  // 데이터 부족만으로 전량 매도/현금화를 제안하지 않도록, 이런 자산은 교체 대상에서 제외하고 보유를 유지한다.
+  const deficient = gsm.filter((r) => r['SMA 위'] === '데이터부족')
+  const usable = gsm.filter((r) => r['SMA 위'] !== '데이터부족')
+
+  const passing = usable
     .filter((r) => r['SMA 위'] === 'YES')
     .sort((a, b) => n(b['12M'], -Infinity) - n(a['12M'], -Infinity))
   const winner = passing.length ? passing[0] : null
   const winShare = n(params.winner_share, 0.8)
-  const rows: PlanRow[] = gsm.map((r) => {
+
+  // 규칙이 관리하지 않는(데이터 부족) 자산은 투자 가능 금액에서 빼야 합계가 100% 를 넘지 않는다.
+  const heldValue = deficient.reduce((a, r) => a + n(r.현재금액), 0)
+  const pool = total - heldValue
+
+  const rows: PlanRow[] = deficient.map((r) => ({
+    전략: code,
+    티커: r.티커,
+    ETF: r.ETF,
+    현재금액: r.현재금액,
+    목표금액: r.현재금액,
+    '매매액(+매수/-매도)': 0,
+    비고: '데이터부족 · 보유 유지',
+  }))
+
+  for (const r of usable) {
     const isWinner = winner !== null && r.티커 === winner.티커
-    const tgt = isWinner ? total * winShare : 0
-    const note = isWinner
-      ? `선정(${Math.round(winShare * 100)}%)`
-      : r['SMA 위'] === 'NO'
-        ? 'SMA 이탈'
-        : r['SMA 위'] === '데이터부족'
-          ? '데이터부족'
-          : '미선정(순위 밀림)'
-    return { 전략: code, 티커: r.티커, ETF: r.ETF, 현재금액: r.현재금액, 목표금액: tgt, '매매액(+매수/-매도)': tgt - r.현재금액, 비고: note }
-  })
+    const tgt = isWinner ? pool * winShare : 0
+    const note = isWinner ? `선정(${Math.round(winShare * 100)}%)` : r['SMA 위'] === 'NO' ? 'SMA 이탈' : '미선정(순위 밀림)'
+    rows.push({
+      전략: code,
+      티커: r.티커,
+      ETF: r.ETF,
+      현재금액: r.현재금액,
+      목표금액: tgt,
+      '매매액(+매수/-매도)': tgt - r.현재금액,
+      비고: note,
+    })
+  }
+
   const cashTgt =
-    winner !== null ? total * n(params.cash_winner_share, 0.2) : total * n(params.cash_no_winner, 1.0)
+    winner !== null
+      ? pool * n(params.cash_winner_share, 0.2)
+      : usable.length
+        ? pool * n(params.cash_no_winner, 1.0)
+        : cashCur // 판정 가능한 후보가 하나도 없으면 현금도 그대로 둔다
   rows.push({
     전략: code,
     티커: 'CASH',
@@ -451,7 +552,7 @@ registerRule('momentum_rotate', (spec, vdf) => {
     현재금액: cashCur,
     목표금액: cashTgt,
     '매매액(+매수/-매도)': cashTgt - cashCur,
-    비고: winner !== null ? '전략 대기현금' : '전 후보 SMA 이탈',
+    비고: winner !== null ? '전략 대기현금' : usable.length ? '전 후보 SMA 이탈' : '후보 데이터 부족 · 유지',
   })
   return rows
 })
@@ -490,26 +591,63 @@ registerRule('drawdown_shift', (spec, vdf, ctx) => {
   const params = spec.params || {}
   const subAll = vdf.filter((r) => r.전략 === code)
   if (!subAll.length) return []
-  const total = subAll.reduce((a, r) => a + n(r.현재금액), 0)
+  const equities = subAll.filter((r) => r.티커 !== 'CASH')
+  const cashCur = subAll.filter((r) => r.티커 === 'CASH').reduce((a, r) => a + n(r.현재금액), 0)
+  const total = equities.reduce((a, r) => a + n(r.현재금액), 0) + cashCur
+
   const dd = ctx.trigger_dd?.[code]
   const threshold = n(params?.threshold, -0.15)
   const triggered = dd !== null && dd !== undefined && Number(dd) <= threshold
-  const stockPct = triggered ? n(params?.triggered_stock_pct, 85) : n(params?.normal_stock_pct, 70)
-  const stockTicker = params?.stock_ticker
-  const stockRoleLegacy = params?.stock_role
-  return subAll.map((r) => {
-    // stock_ticker(신규, 실제 티커 매칭) 우선, 없으면 구버전 stock_role(역할명) 폴백
-    const isStock = stockTicker ? normTicker(r.티커) === normTicker(stockTicker) : r.role === stockRoleLegacy
-    const tgt = (total * (isStock ? stockPct : 100 - stockPct)) / 100
-    const note = isStock
-      ? triggered
-        ? `트리거 발동(고점대비 ${pf(dd)}) → 현금 절반 투입`
-        : `평시 유지(고점대비 ${dd === null || dd === undefined ? '데이터 없음' : pf(dd)})`
-      : triggered
-        ? '트리거 발동 → 현금 축소'
-        : '평시 유지'
-    return { 전략: code, 티커: r.티커, ETF: r.ETF, 현재금액: r.현재금액, 목표금액: tgt, '매매액(+매수/-매도)': tgt - r.현재금액, 비고: note }
+  const normalPct = n(params?.normal_stock_pct, 70)
+  const triggeredPct = n(params?.triggered_stock_pct, 85)
+  const sigName = params?.signal?.ticker || ''
+  const ddTxt = dd === null || dd === undefined ? '데이터 없음' : pf(dd)
+
+  // 트리거 전에는 매매하지 않는다. 이 규칙은 '발동 시 비중 전환'이 목적이므로,
+  // 평시에 종목별 목표% 를 맞추려고 매매를 만들면 할 일 목록만 불필요하게 늘어난다.
+  if (!triggered) {
+    return subAll.map((r) => ({
+      전략: code,
+      티커: r.티커,
+      ETF: r.ETF,
+      현재금액: r.현재금액,
+      목표금액: r.현재금액,
+      '매매액(+매수/-매도)': 0,
+      비고:
+        r.티커 === 'CASH'
+          ? `대기(${sigName} 고점대비 ${ddTxt}) · 매매 없음`
+          : `평시 유지(주식 ${normalPct}% 기준) · 매매 없음`,
+    }))
+  }
+
+  // 발동: 주식 바스켓 전체를 triggeredPct 로 올리고 현금을 나머지로 줄인다.
+  const stockTgt = (total * triggeredPct) / 100
+  const cashTgt = total - stockTgt
+  const eqCur = equities.reduce((a, r) => a + n(r.현재금액), 0)
+  const rows: PlanRow[] = equities.map((r) => {
+    // 바스켓 안에서 현재 비중대로 나눠 담는다 (보유하지 않은 종목을 새로 만들지 않는다).
+    const share = eqCur > 0 ? n(r.현재금액) / eqCur : 1 / Math.max(1, equities.length)
+    const tgt = stockTgt * share
+    return {
+      전략: code,
+      티커: r.티커,
+      ETF: r.ETF,
+      현재금액: r.현재금액,
+      목표금액: tgt,
+      '매매액(+매수/-매도)': tgt - n(r.현재금액),
+      비고: `트리거 발동(${sigName} 고점대비 ${ddTxt}) → 주식 ${normalPct}% → ${triggeredPct}%`,
+    }
   })
+  rows.push({
+    전략: code,
+    티커: 'CASH',
+    ETF: '현금',
+    현재금액: cashCur,
+    목표금액: cashTgt,
+    '매매액(+매수/-매도)': cashTgt - cashCur,
+    비고: '발동 → 현금 축소',
+  })
+  return rows
 })
 
 /* ---------------------------------------------------------------------------

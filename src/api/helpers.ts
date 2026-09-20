@@ -54,34 +54,63 @@ export async function loadAll(c: Context): Promise<Ctx> {
   return { env, specs, cfgs, assets, settings: { price_policy, price_mode } }
 }
 
-/** 스펙에 정의됐지만 kv assets 에 없는 종목을 자동 보강 (누락 방지) */
+/**
+ * 스펙(spec.assets)을 기준으로 보유자산 목록을 재구성한다.
+ *
+ *  - 스펙이 '어떤 종목이 있고 목표%가 얼마인지'의 원본이고,
+ *    kv assets 는 '실제 보유수량·가격'을 들고 있다. 둘을 합쳐 하나의 목록으로 만든다.
+ *  - 따라서 설정 화면에서 종목을 삭제하거나 목표%·티커를 고치면 그대로 반영되고,
+ *    보유수량(shares)·가격(close/prices)은 기존 행에서 그대로 이어받아 유실되지 않는다.
+ *    (예전 구현은 '없는 것만 추가'해서 삭제·수정이 반영되지 않았다.)
+ */
 export function reconcileAssets(assets: AssetRow[], specs: Record<string, Spec>, cfgs: StrategyConfig[]): AssetRow[] {
-  const out = assets.map((a) => ({ ...a }))
-  let nextId = out.reduce((m, a) => Math.max(m, Number(a.id) || 0), -1) + 1
-  for (const spec of Object.values(specs)) {
+  const codes = new Set(cfgs.map((c) => c.code))
+  const prev = assets.filter((a) => codes.has(a.strategy)).map((a) => ({ ...a }))
+  const claimed = new Set<AssetRow>()
+  const out: AssetRow[] = []
+  let nextId = prev.reduce((m, a) => Math.max(m, Number(a.id) || 0), -1) + 1
+
+  const ordered = Object.values(specs).sort((a, b) => (a.display_order ?? 99) - (b.display_order ?? 99))
+  for (const spec of ordered) {
+    if (!codes.has(spec.code)) continue
     for (const sa of spec.assets || []) {
-      const exists = out.some((a) => a.strategy === spec.code && a.ticker === (sa.ticker || '') && a.role === (sa.role || ''))
-      if (exists) continue
-      const ticker = sa.ticker || ''
+      const ticker = String(sa.ticker || '')
+      const role = String(sa.role || '')
+      // 1) 티커+역할 일치 → 2) 티커 일치(역할 변경 추적) → 3) 역할 일치(티커 신규 입력)
+      let hit = prev.find((a) => !claimed.has(a) && a.strategy === spec.code && a.ticker === ticker && a.role === role)
+      if (!hit && ticker) hit = prev.find((a) => !claimed.has(a) && a.strategy === spec.code && a.ticker === ticker)
+      if (!hit && !ticker && role) hit = prev.find((a) => !claimed.has(a) && a.strategy === spec.code && a.role === role)
+      const keep = hit ?? null
+      if (keep) claimed.add(keep)
       out.push({
-        id: String(nextId++),
+        id: keep ? keep.id : String(nextId++),
         strategy: spec.code,
         ticker,
-        name: sa.name || '',
+        name: sa.name || keep?.name || '',
         market: sa.market === 'US' ? 'US' : 'KR',
-        role: sa.role || '',
+        role,
         target_pct: Number(sa.target_pct) || 0,
-        shares: 0,
-        close: ticker === 'CASH' ? 1 : 0,
-        prices: [],
-        signal_ticker: sa.signal_ticker || ticker,
-        category: sa.category || '기타',
+        // 보유수량·가격은 스펙이 아니라 실제 보유 상태를 이어받는다
+        shares: keep ? keep.shares : 0,
+        close: keep ? keep.close : ticker === 'CASH' ? 1 : 0,
+        prices: keep?.prices ?? [],
+        adjclose: keep?.adjclose,
+        signal_ticker: sa.signal_ticker || keep?.signal_ticker || ticker,
+        category: sa.category || keep?.category || '기타',
+        last_fetch_date: keep?.last_fetch_date || '',
+        price_source: keep?.price_source || '',
       })
     }
   }
-  // 스펙에서 사라진 전략의 자산 정리
-  const codes = new Set(cfgs.map((c) => c.code))
-  return out.filter((a) => codes.has(a.strategy))
+
+  // 스펙이 없는 전략(아직 규칙을 만들지 않은 상태)은 기존 행을 그대로 보존한다.
+  // 스펙이 있는데 스펙 목록에 없는 행은 삭제된 것으로 보고 버린다.
+  for (const a of prev) {
+    if (claimed.has(a)) continue
+    if (specs[a.strategy]) continue
+    out.push(a)
+  }
+  return out
 }
 
 export { orderedSpecs }
