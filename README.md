@@ -1,5 +1,49 @@
 # 자산배분 리밸런싱 도우미 (Asset Rebalancing Helper)
 
+## 독립형 Streamlit 버전 (권장)
+
+`streamlit_app.py`는 ChatGPT Sites나 Cloudflare에 종속되지 않는 별도 실행 경로입니다.
+코드는 이 저장소에서 직접 수정하고, 데이터는 사용자가 소유한 Google Sheets에 저장합니다.
+
+### Google Sheets 준비
+
+1. Google Cloud에서 프로젝트를 만들고 **Google Sheets API**를 활성화합니다.
+2. 서비스 계정을 만든 뒤 JSON 키를 발급합니다.
+3. 빈 Google 스프레드시트를 만들고 서비스 계정의 `client_email`에 **편집자** 권한으로 공유합니다.
+4. 시트 URL의 `/d/`와 `/edit` 사이 값을 `spreadsheet_id`로 사용합니다.
+5. `.streamlit/secrets.toml.example`을 `.streamlit/secrets.toml`로 복사한 뒤 ID와 서비스 계정 JSON 값을 입력합니다.
+
+실제 `.streamlit/secrets.toml`은 커밋하지 마세요. Streamlit Community Cloud에서는 App settings의
+Secrets 입력란에 같은 내용을 붙여 넣습니다.
+
+### 로컬 실행
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+streamlit run streamlit_app.py
+```
+
+첫 실행 때 다음 워크시트가 자동 생성됩니다.
+
+| 워크시트 | 용도 |
+|---|---|
+| `Holdings` | 전략, 계좌, 종목, 목표비중, 보유수량 |
+| `Strategies` | 전략 규칙과 파라미터 |
+| `Snapshots` | 월말 종가 기준 포트폴리오 상태 |
+| `Actions` | 계획 수량, 실제 수량, 실행 여부와 메모 |
+
+### Streamlit Community Cloud 배포
+
+1. 이 저장소를 GitHub에 push합니다.
+2. Streamlit Community Cloud에서 저장소를 선택합니다.
+3. Main file path를 `streamlit_app.py`로 지정합니다.
+4. Advanced settings → Secrets에 로컬 `secrets.toml` 내용을 등록합니다.
+5. Deploy를 누릅니다. 이후 GitHub의 코드를 수정하면 자동 재배포됩니다.
+
+> 기존 TypeScript/Cloudflare 앱은 비교와 마이그레이션을 위해 그대로 보존되어 있습니다.
+
 기존 Streamlit 앱(`asset_allocation_app_v17.py`)을 **Cloudflare Pages + Hono + D1** 로 옮긴 웹앱입니다.
 가장 큰 변화는 두 가지입니다.
 

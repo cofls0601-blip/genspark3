@@ -1,0 +1,8 @@
+[
+  {"code":"LAA","rule":"sma_filter_rebalance","params":{"sma_tickers":["133690","245350"],"sma_months":10,"quarter_end_restore":true}},
+  {"code":"GSM","rule":"momentum_rotate","params":{"winner_share":0.8,"cash_winner_share":0.2,"cash_no_winner":1.0}},
+  {"code":"ISA","rule":"drawdown_buy","params":{"threshold":-0.1,"buy_fraction":0.5,"signal":{"ticker":"QQQ","market":"US","lookback_days":120}}},
+  {"code":"SSO","rule":"drawdown_shift","params":{"threshold":-0.15,"normal_stock_pct":70,"triggered_stock_pct":85,"signal":{"ticker":"360750","market":"KR","lookback_days":120}}},
+  {"code":"EM","rule":"hold","params":{"hold_note":"매매 없음(연 1회만 허용)"}}
+]
+

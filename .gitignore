@@ -35,3 +35,6 @@ lerna-debug.log*
 # D1 local state
 .wrangler/
 seed.sql
+.streamlit/secrets.toml
+__pycache__/
+*.py[cod]

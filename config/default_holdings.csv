@@ -1,0 +1,22 @@
+strategy,account,ticker,name,market,category,role,target_pct,shares
+LAA,과세 연금저축,133690,TIGER 미국나스닥100,KR,선진국 주식,NASDAQ,12.5,0
+LAA,과세 연금저축,245350,TIGER 유로스탁스배당30,KR,선진국 주식,EuroStoxx,12.5,0
+LAA,과세 연금저축,360750,TIGER 미국S&P500,KR,선진국 주식,S&P500,12.5,0
+LAA,과세 연금저축,251350,KODEX 선진국MSCI World,KR,선진국 주식,MSCI World,15.5,0
+LAA,과세 연금저축,132030,KODEX 골드선물(H),KR,금,Gold,25,0
+LAA,과세 연금저축,148070,KIWOOM 국고채10년,KR,선진국 채권,Bond,22,0
+LAA,과세 연금저축,CASH,현금,KR,현금,필터이탈 대기현금,0,0
+GSM,비과세 연금저축,360750,TIGER 미국S&P500,KR,선진국 주식,GSM 후보,0,0
+GSM,비과세 연금저축,251350,KODEX 선진국MSCI World,KR,선진국 주식,GSM 후보,0,0
+GSM,비과세 연금저축,133690,TIGER 미국나스닥100,KR,선진국 주식,GSM 후보,0,0
+GSM,비과세 연금저축,245350,TIGER 유로스탁스배당30,KR,선진국 주식,GSM 후보,0,0
+GSM,비과세 연금저축,CASH,현금,KR,현금,대기현금,20,0
+ISA,ISA,418660,TIGER 미국나스닥100레버리지(합성),KR,선진국 주식,-10% 트리거,0,0
+ISA,ISA,CASH,현금,KR,현금,대기현금,100,0
+SSO,일반계좌 2,360750,TIGER 미국S&P500,KR,선진국 주식,S&P500 기준,70,0
+SSO,일반계좌 2,153130,KODEX 단기채권,KR,현금,현금성,30,0
+EM,일반계좌 1,069500,KODEX 200,KR,신흥국 주식,한국,25,0
+EM,일반계좌 1,,중국 ETF 입력,KR,신흥국 주식,중국,25,0
+EM,일반계좌 1,,인도 ETF 입력,KR,신흥국 주식,인도,25,0
+EM,일반계좌 1,,베트남 ETF 입력,KR,신흥국 주식,베트남,25,0
+
