@@ -5,16 +5,23 @@
 `streamlit_app.py`는 ChatGPT Sites나 Cloudflare에 종속되지 않는 별도 실행 경로입니다.
 코드는 이 저장소에서 직접 수정하고, 데이터는 사용자가 소유한 Google Sheets에 저장합니다.
 
-### Google Sheets 준비
+### Google Sheets 준비 — Google Cloud 불필요
 
-1. Google Cloud에서 프로젝트를 만들고 **Google Sheets API**를 활성화합니다.
-2. 서비스 계정을 만든 뒤 JSON 키를 발급합니다.
-3. 빈 Google 스프레드시트를 만들고 서비스 계정의 `client_email`에 **편집자** 권한으로 공유합니다.
-4. 시트 URL의 `/d/`와 `/edit` 사이 값을 `spreadsheet_id`로 사용합니다.
-5. `.streamlit/secrets.toml.example`을 `.streamlit/secrets.toml`로 복사한 뒤 ID와 서비스 계정 JSON 값을 입력합니다.
+Streamlit 버전은 Google Sheets를 **읽기 전용**으로 사용합니다. 서비스 계정, JSON 키, Google Sheets API 활성화가 필요하지 않습니다.
 
-실제 `.streamlit/secrets.toml`은 커밋하지 마세요. Streamlit Community Cloud에서는 App settings의
-Secrets 입력란에 같은 내용을 붙여 넣습니다.
+1. Google 스프레드시트에 `Holdings`, `Strategies` 탭을 만듭니다.
+2. 스프레드시트의 공유 설정을 **링크가 있는 사용자: 뷰어**로 설정합니다.
+3. 시트 URL의 `/d/`와 `/edit` 사이 값을 `spreadsheet_id`로 사용합니다.
+4. Streamlit Community Cloud의 App settings → Secrets에 아래처럼 입력합니다.
+
+```toml
+[google_sheets]
+spreadsheet_id = "여기에_스프레드시트_ID"
+```
+
+앱은 Google Sheets를 수정하지 않습니다. 월말 리밸런싱 후 **액션 플랜** 탭에서 Snapshots/Actions 데이터를 TSV로 내려받거나 복사용 텍스트를 전체 선택해 Google Sheets에 직접 붙여넣을 수 있습니다.
+
+`Snapshots`, `Actions` 탭을 만들어 같은 공유 범위에 두면 앱의 **월별 기록** 화면에서도 과거 기록을 읽어옵니다.
 
 ### 로컬 실행
 
@@ -25,7 +32,7 @@ pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
-첫 실행 때 다음 워크시트가 자동 생성됩니다.
+Google Sheets에는 다음 워크시트를 사용합니다.
 
 | 워크시트 | 용도 |
 |---|---|
@@ -39,7 +46,7 @@ streamlit run streamlit_app.py
 1. 이 저장소를 GitHub에 push합니다.
 2. Streamlit Community Cloud에서 저장소를 선택합니다.
 3. Main file path를 `streamlit_app.py`로 지정합니다.
-4. Advanced settings → Secrets에 로컬 `secrets.toml` 내용을 등록합니다.
+4. Advanced settings → Secrets에 `[google_sheets] spreadsheet_id = "..."`만 등록합니다.
 5. Deploy를 누릅니다. 이후 GitHub의 코드를 수정하면 자동 재배포됩니다.
 
 > 기존 TypeScript/Cloudflare 앱은 비교와 마이그레이션을 위해 그대로 보존되어 있습니다.

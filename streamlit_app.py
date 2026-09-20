@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from streamlit_app.data import GoogleSheetsStore, StoreError
+from streamlit_app.data import ReadOnlySheetsStore, StoreError, build_month_exports
 from streamlit_app.engine import build_action_plan, enrich_prices, portfolio_view
 
 
@@ -14,8 +14,8 @@ st.set_page_config(page_title="월말 자산배분 도우미", page_icon="📊",
 
 
 @st.cache_resource
-def get_store() -> GoogleSheetsStore:
-    return GoogleSheetsStore.from_streamlit_secrets()
+def get_store() -> ReadOnlySheetsStore:
+    return ReadOnlySheetsStore.from_streamlit_secrets()
 
 
 def won(value: float) -> str:
@@ -23,14 +23,13 @@ def won(value: float) -> str:
 
 
 st.title("월말 자산배분 도우미")
-st.caption("금융계좌 연결 없이 Google Sheets에 보유현황과 리밸런싱 이력을 보관합니다.")
+st.caption("Google Sheets는 읽기 전용으로 사용하고, 월말 리밸런싱 결과는 복사해서 직접 붙여넣습니다.")
 
 try:
     store = get_store()
-    store.ensure_schema()
 except StoreError as exc:
     st.error(str(exc))
-    st.info("README의 Google Sheets 연결 절차를 완료한 뒤 앱을 다시 실행하세요.")
+    st.info("README의 읽기 전용 Google Sheets 연결 절차를 확인하세요.")
     st.stop()
 
 holdings = store.read("Holdings")
@@ -105,9 +104,34 @@ with tab_plan:
             "현재평가액": st.column_config.NumberColumn(format="%,.0f원"),
         },
     )
-    if st.button("액션 플랜과 월말 상태 저장", type="primary"):
-        store.save_month(as_of, view, edited_plan, memo)
-        st.success("Google Sheets에 월말 상태와 액션 플랜을 저장했습니다.")
+    snapshots_export, actions_export = build_month_exports(as_of, view, edited_plan, memo)
+
+    st.markdown("#### Google Sheets에 붙여넣기")
+    st.caption("아래 표는 탭으로 구분되어 있습니다. 전체 선택 → 복사 후 Google Sheets의 첫 셀에 붙여넣으세요.")
+
+    snap_tsv = snapshots_export.to_csv(sep="\t", index=False)
+    action_tsv = actions_export.to_csv(sep="\t", index=False)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button(
+            "Snapshots TSV 다운로드",
+            data=snap_tsv.encode("utf-8-sig"),
+            file_name=f"snapshots_{as_of.isoformat()}.tsv",
+            mime="text/tab-separated-values",
+            use_container_width=True,
+        )
+    with c2:
+        st.download_button(
+            "Actions TSV 다운로드",
+            data=action_tsv.encode("utf-8-sig"),
+            file_name=f"actions_{as_of.isoformat()}.tsv",
+            mime="text/tab-separated-values",
+            use_container_width=True,
+        )
+
+    st.text_area("Snapshots 복사용", value=snap_tsv, height=180)
+    st.text_area("Actions 복사용", value=action_tsv, height=180)
 
 with tab_holdings:
     st.subheader("보유수량·종목 편집")
@@ -121,17 +145,27 @@ with tab_holdings:
             "shares": st.column_config.NumberColumn(min_value=0.0, format="%.4f"),
         },
     )
-    if st.button("보유내역 변경 저장"):
-        store.replace("Holdings", edited)
-        st.cache_resource.clear()
-        st.session_state.pop("priced_holdings", None)
-        st.success("저장했습니다. 페이지를 새로고침하면 변경값이 반영됩니다.")
+    st.info("읽기 전용 모드입니다. 보유수량 변경은 Google Sheets의 Holdings 시트에서 직접 수정하세요.")
+    edited_tsv = edited.to_csv(sep="\t", index=False)
+    st.download_button(
+        "편집한 보유내역 TSV 다운로드",
+        data=edited_tsv.encode("utf-8-sig"),
+        file_name="holdings_edited.tsv",
+        mime="text/tab-separated-values",
+        use_container_width=True,
+    )
 
 with tab_history:
     st.subheader("월별 스냅샷")
-    snapshots = store.read("Snapshots")
-    actions = store.read("Actions")
-    st.dataframe(snapshots.sort_values("date", ascending=False), use_container_width=True, hide_index=True)
+    snapshots = store.read_optional("Snapshots")
+    actions = store.read_optional("Actions")
+    if snapshots.empty:
+        st.caption("Snapshots 시트가 없거나 공개되지 않았습니다.")
+    else:
+        st.dataframe(snapshots.sort_values("date", ascending=False), use_container_width=True, hide_index=True)
     st.subheader("매매 실행 이력")
-    st.dataframe(actions.sort_values("date", ascending=False), use_container_width=True, hide_index=True)
+    if actions.empty:
+        st.caption("Actions 시트가 없거나 공개되지 않았습니다.")
+    else:
+        st.dataframe(actions.sort_values("date", ascending=False), use_container_width=True, hide_index=True)
 
