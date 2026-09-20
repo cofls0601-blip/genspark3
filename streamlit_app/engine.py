@@ -146,11 +146,32 @@ def build_action_plan(view: pd.DataFrame, strategies: pd.DataFrame, as_of: date)
                 notes[stock] = f"낙폭 {dd:.1%} 트리거 발동"
             else:
                 stock_pct = float(params.get("triggered_stock_pct", 85))
+                normal_stock_pct = float(params.get("normal_stock_pct", 70))
                 targets = {str(r.ticker): 0.0 for r in sub.itertuples()}
-                each = stock_pct / max(1, len(equities))
-                for ticker in equities["ticker"]:
-                    targets[str(ticker)] = each
+
+                # Preserve the user's configured stock mix instead of splitting
+                # the triggered stock allocation equally across all equities.
+                configured = {
+                    str(r.ticker): max(0.0, float(r.target_pct))
+                    for r in equities.itertuples()
+                }
+                configured_total = sum(configured.values())
+                if configured_total <= 0:
+                    configured = {
+                        str(r.ticker): max(0.0, float(r.현재비중))
+                        for r in equities.itertuples()
+                    }
+                    configured_total = sum(configured.values())
+
+                if configured_total > 0:
+                    for ticker, weight in configured.items():
+                        targets[ticker] = stock_pct * weight / configured_total
+                        notes[ticker] = (
+                            f"낙폭 {dd:.1%} 트리거 발동 · "
+                            f"주식 {normal_stock_pct:.0f}%→{stock_pct:.0f}%"
+                        )
                 targets["CASH"] = 100 - stock_pct
+                notes["CASH"] = f"낙폭 {dd:.1%} 트리거 발동 · 현금 축소"
 
         for r in sub.itertuples():
             target_value = total * targets.get(str(r.ticker), 0.0) / 100
