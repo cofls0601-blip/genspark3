@@ -374,8 +374,25 @@
       })
       .join('')
 
+    const sheetExportCard = `
+      <div class="card bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm mb-4 p-4">
+        <div class="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <div class="font-extrabold"><i class="fas fa-table text-green-600 mr-2"></i>Google Sheets 이관</div>
+            <div class="text-[12px] text-slate-500 dark:text-slate-400 mt-1">
+              보유수량은 이 웹앱에서 수정·저장합니다. 필요할 때 현재 전체 보유내역을 탭 구분 텍스트로 복사하거나 파일로 내려받아 Google Sheets에 직접 붙여넣으세요.
+            </div>
+          </div>
+          <div class="flex gap-1.5 flex-wrap">
+            ${U.btn('<i class="fas fa-copy"></i> 전체 보유내역 복사', 'copyHoldingsTsv', 'btn-s')}
+            ${U.btn('<i class="fas fa-file-arrow-down"></i> TSV 파일', 'downloadHoldingsTsv', 'btn-s')}
+          </div>
+        </div>
+      </div>`
+
     return (
       U.sectionTitle('포트폴리오', '전략별 목표비중과 현재비중의 괴리를 확인합니다. 보유수량을 눌러 수정할 수 있습니다.') +
+      sheetExportCard +
       `<div class="grid grid-cols-2 md:grid-cols-3 gap-2.5 mb-4">
         ${U.metric('총 자산', U.won(total), `활성 전략 ${cfgs.length}개`)}
         ${U.metric('자산군', `${cats.length}개`, cats.length ? `최대 ${esc(cats[0][0])} ${total > 0 ? ((cats[0][1] / total) * 100).toFixed(1) : '0'}%` : '')}
@@ -396,6 +413,82 @@
     const v = Number(String(inp).replace(/[,\s]/g, ''))
     if (!Number.isFinite(v)) return U.toast('숫자를 입력하세요.', 'err')
     saveAssets((boot.assets || []).map((a) => (a.id === id ? { ...a, shares: v } : a)))
+  }
+
+  function holdingsTsv() {
+    const boot = stateOf()
+    const accounts = new Map((boot.strategies || []).map((s) => [String(s.code || ''), String(s.account || '')]))
+    const cols = ['strategy', 'account', 'ticker', 'name', 'market', 'category', 'role', 'target_pct', 'shares']
+    const cell = (v) => String(v ?? '').replace(/[\\t\\r\\n]+/g, ' ')
+    const lines = [cols.join('\\t')]
+    for (const a of boot.assets || []) {
+      lines.push([
+        a.strategy,
+        accounts.get(String(a.strategy || '')) || '',
+        a.ticker,
+        a.name,
+        a.market,
+        a.category,
+        a.role,
+        n(a.target_pct),
+        n(a.shares),
+      ].map(cell).join('\\t'))
+    }
+    return lines.join('\\n')
+  }
+
+  ACTIONS.copyHoldingsTsv = async () => {
+    try {
+      await navigator.clipboard.writeText(holdingsTsv())
+      U.toast('현재 보유내역 전체를 복사했습니다. Google Sheets A1 셀에 붙여넣으세요.')
+    } catch (err) {
+      U.toast('클립보드 복사에 실패했습니다. TSV 파일을 이용하세요.', 'err')
+    }
+  }
+
+  ACTIONS.downloadHoldingsTsv = () => {
+    const blob = new Blob(['\\ufeff' + holdingsTsv()], { type: 'text/tab-separated-values;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `holdings-${U.today()}.tsv`
+    a.click()
+    URL.revokeObjectURL(a.href)
+    U.toast('Google Sheets용 보유내역 파일을 만들었습니다.')
+  }
+
+  function snapshotTsv(date) {
+    const h = (stateOf().history || []).find((x) => String(x.date) === String(date))
+    if (!h) return ''
+    const cols = ['date', 'saved_at', 'strategy', 'account', 'ticker', 'name', 'category', 'close', 'shares', 'value', 'weight_pct', 'target_pct']
+    const cell = (v) => String(v ?? '').replace(/[\\t\\r\\n]+/g, ' ')
+    const lines = [cols.join('\\t')]
+    for (const r of h.composition || []) {
+      lines.push([h.date, h.saved_at || '', r['전략'], r['계좌'], r['티커'], r['ETF'], r['분류'], n(r['종가']), n(r['보유수량']), n(r['현재금액']), n(r['현재비중']), n(r['목표비중'])].map(cell).join('\\t'))
+    }
+    return lines.join('\\n')
+  }
+
+  ACTIONS.copySnapshotTsv = async (e, el) => {
+    const txt = snapshotTsv(el.dataset.date)
+    if (!txt) return U.toast('해당 월 기록을 찾지 못했습니다.', 'err')
+    try {
+      await navigator.clipboard.writeText(txt)
+      U.toast(`${el.dataset.date} 월별 포트폴리오 구성을 복사했습니다.`)
+    } catch (err) {
+      U.toast('클립보드 복사에 실패했습니다. TSV 파일을 이용하세요.', 'err')
+    }
+  }
+
+  ACTIONS.downloadSnapshotTsv = (e, el) => {
+    const txt = snapshotTsv(el.dataset.date)
+    if (!txt) return U.toast('해당 월 기록을 찾지 못했습니다.', 'err')
+    const blob = new Blob(['\\ufeff' + txt], { type: 'text/tab-separated-values;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `portfolio-snapshot-${el.dataset.date}.tsv`
+    a.click()
+    URL.revokeObjectURL(a.href)
+    U.toast(`${el.dataset.date} 월별 기록 파일을 만들었습니다.`)
   }
 
   ACTIONS.goSettings = (e, el) => {
@@ -558,6 +651,8 @@
                 </div>
                 <div class="flex gap-1.5 shrink-0">
                   ${U.btn('<i class="fas fa-copy"></i> 한 줄 복사', 'copyRow', 'btn-s !py-1.5 !px-2.5 !text-[12px]', `data-date="${esc(h.date)}"`)}
+                  ${U.btn('<i class="fas fa-table"></i> 시트용 복사', 'copySnapshotTsv', 'btn-s !py-1.5 !px-2.5 !text-[12px]', `data-date="${esc(h.date)}"`)}
+                  ${U.btn('<i class="fas fa-file-arrow-down"></i>', 'downloadSnapshotTsv', 'btn-s !py-1.5 !px-2.5 !text-[12px]', `data-date="${esc(h.date)}" title="월별 구성 TSV"`)}
                   ${U.btn('<i class="fas fa-trash"></i>', 'delSnapshot', 'btn-d !py-1.5 !px-2.5 !text-[12px]', `data-date="${esc(h.date)}"`)}
                 </div>
               </li>`,
