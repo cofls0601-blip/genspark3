@@ -456,6 +456,41 @@
     U.toast('Google Sheets용 보유내역 파일을 만들었습니다.')
   }
 
+  function snapshotTsv(date) {
+    const h = (stateOf().history || []).find((x) => String(x.date) === String(date))
+    if (!h) return ''
+    const cols = ['date', 'saved_at', 'strategy', 'account', 'ticker', 'name', 'category', 'close', 'shares', 'value', 'weight_pct', 'target_pct']
+    const cell = (v) => String(v ?? '').replace(/[\\t\\r\\n]+/g, ' ')
+    const lines = [cols.join('\\t')]
+    for (const r of h.composition || []) {
+      lines.push([h.date, h.saved_at || '', r['전략'], r['계좌'], r['티커'], r['ETF'], r['분류'], n(r['종가']), n(r['보유수량']), n(r['현재금액']), n(r['현재비중']), n(r['목표비중'])].map(cell).join('\\t'))
+    }
+    return lines.join('\\n')
+  }
+
+  ACTIONS.copySnapshotTsv = async (e, el) => {
+    const txt = snapshotTsv(el.dataset.date)
+    if (!txt) return U.toast('해당 월 기록을 찾지 못했습니다.', 'err')
+    try {
+      await navigator.clipboard.writeText(txt)
+      U.toast(`${el.dataset.date} 월별 포트폴리오 구성을 복사했습니다.`)
+    } catch (err) {
+      U.toast('클립보드 복사에 실패했습니다. TSV 파일을 이용하세요.', 'err')
+    }
+  }
+
+  ACTIONS.downloadSnapshotTsv = (e, el) => {
+    const txt = snapshotTsv(el.dataset.date)
+    if (!txt) return U.toast('해당 월 기록을 찾지 못했습니다.', 'err')
+    const blob = new Blob(['\\ufeff' + txt], { type: 'text/tab-separated-values;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `portfolio-snapshot-${el.dataset.date}.tsv`
+    a.click()
+    URL.revokeObjectURL(a.href)
+    U.toast(`${el.dataset.date} 월별 기록 파일을 만들었습니다.`)
+  }
+
   ACTIONS.goSettings = (e, el) => {
     U.S.editingCode = el.dataset.code
     U.S.page = 'settings'
@@ -616,6 +651,8 @@
                 </div>
                 <div class="flex gap-1.5 shrink-0">
                   ${U.btn('<i class="fas fa-copy"></i> 한 줄 복사', 'copyRow', 'btn-s !py-1.5 !px-2.5 !text-[12px]', `data-date="${esc(h.date)}"`)}
+                  ${U.btn('<i class="fas fa-table"></i> 시트용 복사', 'copySnapshotTsv', 'btn-s !py-1.5 !px-2.5 !text-[12px]', `data-date="${esc(h.date)}"`)}
+                  ${U.btn('<i class="fas fa-file-arrow-down"></i>', 'downloadSnapshotTsv', 'btn-s !py-1.5 !px-2.5 !text-[12px]', `data-date="${esc(h.date)}" title="월별 구성 TSV"`)}
                   ${U.btn('<i class="fas fa-trash"></i>', 'delSnapshot', 'btn-d !py-1.5 !px-2.5 !text-[12px]', `data-date="${esc(h.date)}"`)}
                 </div>
               </li>`,
