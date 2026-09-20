@@ -16,6 +16,32 @@ SCHEMA = {
 }
 
 
+
+
+def load_local_holdings() -> pd.DataFrame:
+    """Load the app-owned portfolio seed. Google Sheets is export/archive only."""
+    path = __import__("pathlib").Path(__file__).resolve().parents[1] / "config" / "default_holdings.csv"
+    df = pd.read_csv(path, dtype={"ticker": str}).reindex(columns=SCHEMA["Holdings"])
+    raw = df["ticker"].fillna("").astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+    is_kr_code = df["market"].eq("KR") & raw.ne("") & raw.ne("CASH")
+    df["ticker"] = raw.where(~is_kr_code, raw.str.zfill(6))
+    for col in ["target_pct", "shares"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+    return df
+
+
+def load_local_strategies() -> pd.DataFrame:
+    """Load editable strategy rules bundled with the Streamlit app."""
+    path = __import__("pathlib").Path(__file__).resolve().parents[1] / "config" / "default_strategies.json"
+    items = json.loads(path.read_text(encoding="utf-8"))
+    rows = [{
+        "code": x.get("code", ""),
+        "rule": x.get("rule", "static"),
+        "params_json": json.dumps(x.get("params", {}), ensure_ascii=False, separators=(",", ":")),
+        "active": bool(x.get("active", True)),
+    } for x in items]
+    return pd.DataFrame(rows, columns=SCHEMA["Strategies"])
+
 class StoreError(RuntimeError):
     pass
 
