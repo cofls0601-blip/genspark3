@@ -5,7 +5,7 @@
   "description": "자산배분 리밸런싱 도우미 — 노코드 전략 규칙 빌더 + Yahoo Finance 단일 데이터 소스 (Hono + Cloudflare Pages + D1)",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/finalize-build.mjs",
     "preview": "wrangler pages dev dist",
     "dev:sandbox": "npm run build && wrangler pages dev dist --ip 0.0.0.0 --port 3000",
     "dev:d1": "wrangler pages dev dist --d1=asset-rebalance-app-production --local --ip 0.0.0.0 --port 3000",

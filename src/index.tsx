@@ -11,6 +11,9 @@ import { plan } from './api/plan'
 import { crud } from './api/crud'
 import { history } from './api/history'
 import { fail, type AppEnv } from './api/helpers'
+import appJs from '../public/static/app.js?raw'
+import pagesJs from '../public/static/pages.js?raw'
+import styleCss from '../public/static/style.css?raw'
 
 const app = new Hono<AppEnv>()
 
@@ -38,13 +41,13 @@ const SHELL = `<!DOCTYPE html>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>" />
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
-<link rel="stylesheet" href="/static/style.css" />
+<style>${styleCss}</style>
 </head>
 <body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 antialiased">
 <div id="app" class="min-h-screen"></div>
 <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 space-y-2"></div>
- <script src="/static/app.js" defer></script>
- <script src="/static/pages.js" defer></script>
+ <script>${appJs.split('</script>').join('<\\/script>')}</script>
+ <script>${pagesJs.split('</script>').join('<\\/script>')}</script>
 </body>
 </html>`
 

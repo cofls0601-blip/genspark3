@@ -137,12 +137,22 @@
         }
       </div>`
 
+    const planNote = `
+      <div class="card bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm mb-4 p-4">
+        <div class="flex items-center justify-between gap-3 mb-2">
+          <div class="font-extrabold"><i class="fas fa-pen-to-square text-blue-600 mr-2"></i>이번 달 액션 플랜 메모</div>
+          <span class="text-[12px] text-slate-500">스냅샷에 함께 저장</span>
+        </div>
+        <textarea class="inp min-h-24" data-oninput="actionPlanInput" placeholder="예: 장 마감 종가 확인 후 QQQ 3주 매수, 채권 비중은 유지. 체결 뒤 보유수량 갱신.">${esc(U.S.actionPlanDraft || '')}</textarea>
+      </div>`
+
     const excluded = (p.plan || []).filter((r) => Math.abs(n(r['매매액(+매수/-매도)'])) > 0 && Math.abs(n(r['매매액(+매수/-매도)'])) <= 1000)
 
     return (
       head +
       warnBanner() +
       metrics +
+      planNote +
       actionCard +
       (excluded.length
         ? `<div class="text-[12px] text-slate-500 dark:text-slate-400">금액이 1,000원 미만이라 목록에서 제외된 항목 ${excluded.length}건: ${excluded
@@ -192,13 +202,17 @@
 
   ACTIONS.planRefresh = async () => U.refreshPlan(true)
   ACTIONS.printPage = () => window.print()
+  ACTIONS.actionPlanInput = (e, el) => {
+    U.S.actionPlanDraft = el.value
+  }
 
   ACTIONS.saveSnapshot = async (e, el) => {
     el.disabled = true
     try {
-      const rec = await U.api.post('/api/history/snapshot', { date: plan()?.date })
+      const rec = await U.api.post('/api/history/snapshot', { date: plan()?.date, plan: U.S.actionPlanDraft.trim() })
       const boot = await U.api.get('/api/bootstrap')
       U.S.boot = boot
+      U.S.actionPlanDraft = ''
       U.toast(`기록을 저장했습니다 (${rec.record.date} · ${U.won(rec.record.total)})`)
       U.render()
     } catch (err) {
