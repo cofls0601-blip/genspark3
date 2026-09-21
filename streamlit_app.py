@@ -17,10 +17,24 @@ from streamlit_app.data import (
     to_csv_bytes,
     to_tsv,
 )
-from streamlit_app.engine import (
-    build_action_plan, comparison_history, enrich_prices, performance_summary, portfolio_view,
-    sortino, twr, validate_configuration, xirr,
-)
+import importlib
+import streamlit_app.engine as allocation_engine
+
+# Streamlit Community Cloud can keep imported modules alive while pulling a new
+# commit.  Reload the calculation engine when a newly deployed symbol is not yet
+# present in that process, so the UI and engine can never run as mixed versions.
+if not hasattr(allocation_engine, "validate_configuration"):
+    allocation_engine = importlib.reload(allocation_engine)
+
+build_action_plan = allocation_engine.build_action_plan
+comparison_history = allocation_engine.comparison_history
+enrich_prices = allocation_engine.enrich_prices
+performance_summary = allocation_engine.performance_summary
+portfolio_view = allocation_engine.portfolio_view
+sortino = allocation_engine.sortino
+twr = allocation_engine.twr
+validate_configuration = allocation_engine.validate_configuration
+xirr = allocation_engine.xirr
 
 
 st.set_page_config(page_title="월말 자산배분 도우미", page_icon="📊", layout="wide")
