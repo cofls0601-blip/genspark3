@@ -10,8 +10,8 @@ import pandas as pd
 
 HOLDING_COLUMNS = ["strategy", "account", "ticker", "name", "market", "category", "role", "target_pct", "shares"]
 STRATEGY_COLUMNS = ["code", "account", "description", "dynamic", "active", "annual_limit", "rule", "params_json"]
-SNAPSHOT_COLUMNS = ["date", "saved_at", "strategy", "account", "ticker", "name", "category", "price_date", "close", "fx", "shares", "value", "weight_pct", "target_pct", "memo"]
-ACTION_COLUMNS = ["date", "saved_at", "strategy", "ticker", "name", "side", "planned_shares", "actual_shares", "actual_amount", "planned_amount", "done", "reason", "memo"]
+SNAPSHOT_COLUMNS = ["date", "saved_at", "strategy", "account", "ticker", "name", "category", "close", "shares", "value", "weight_pct", "target_pct", "memo"]
+ACTION_COLUMNS = ["date", "saved_at", "strategy", "ticker", "name", "side", "planned_shares", "actual_shares", "planned_amount", "done", "reason", "memo"]
 CASHFLOW_COLUMNS = ["date", "amount", "memo", "strategy"]
 CATEGORY_TARGET_COLUMNS = ["category", "target_pct"]
 
@@ -136,17 +136,14 @@ def export_month(as_of: date, view: pd.DataFrame, plan: pd.DataFrame, memo: str)
     snapshots = pd.DataFrame({
         "date": as_of.isoformat(), "saved_at": stamp,
         "strategy": view["strategy"], "account": view["account"], "ticker": view["ticker"],
-        "name": view["name"], "category": view["category"],
-        "price_date": view["price_date"], "close": view["close"], "fx": view["fx"],
+        "name": view["name"], "category": view["category"], "close": view["close"],
         "shares": view["shares"], "value": view["평가액"], "weight_pct": view["전체비중"],
         "target_pct": view["target_pct"], "memo": memo,
     }).reindex(columns=SNAPSHOT_COLUMNS)
-    actual_amount = plan["실제체결금액"] if "실제체결금액" in plan else 0.0
     actions = pd.DataFrame({
         "date": as_of.isoformat(), "saved_at": stamp, "strategy": plan["전략"],
         "ticker": plan["티커"], "name": plan["종목"], "side": plan["구분"],
         "planned_shares": plan["제안수량"], "actual_shares": plan["실제수량"],
-        "actual_amount": actual_amount,
         "planned_amount": plan["예상매매액"], "done": plan["실행"],
         "reason": plan["근거"], "memo": plan["메모"],
     }).reindex(columns=ACTION_COLUMNS)
