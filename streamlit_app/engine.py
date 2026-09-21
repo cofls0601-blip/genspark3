@@ -28,13 +28,18 @@ def _series(ticker: str, market: str, as_of: date, adjusted: bool = False) -> pd
     return pd.to_numeric(column, errors="coerce").dropna()
 
 
-def enrich_prices(holdings: pd.DataFrame, as_of: date, adjusted: bool = False) -> tuple[pd.DataFrame, list[str]]:
+def enrich_prices(holdings: pd.DataFrame, as_of: date, adjusted: bool = False,
+                  strategies: pd.DataFrame | None = None) -> tuple[pd.DataFrame, list[str]]:
     out = holdings.copy()
     out["close"] = 0.0
     out["fx"] = 1.0
     out["sma10"] = np.nan
+    out["sma_period"] = 10
     out["momentum12"] = np.nan
     out["drawdown120"] = np.nan
+    out["price_date"] = pd.NaT
+    out["fx_date"] = pd.NaT
+    out["price_status"] = "미조회"
     warnings: list[str] = []
     fx = _series("KRW=X", "US", as_of)
     usdkrw = float(fx.iloc[-1]) if not fx.empty else 0.0
@@ -44,22 +49,38 @@ def enrich_prices(holdings: pd.DataFrame, as_of: date, adjusted: bool = False) -
             continue
         if ticker == "CASH":
             out.at[idx, "close"] = 1.0
+            out.at[idx, "price_date"] = pd.Timestamp(as_of)
+            out.at[idx, "fx_date"] = pd.Timestamp(as_of)
+            out.at[idx, "price_status"] = "현금"
             continue
         try:
+            _, rule_params = _params(strategies, str(row["strategy"])) if strategies is not None else ("static", {})
+            sma_period = max(2, int(rule_params.get("sma_months", 10)))
+            out.at[idx, "sma_period"] = sma_period
             prices = _series(ticker, str(row["market"]), as_of, adjusted)
             if prices.empty:
                 raise ValueError("종가 데이터 없음")
             out.at[idx, "close"] = float(prices.iloc[-1])
-            out.at[idx, "fx"] = usdkrw if row["market"] == "US" else 1.0
+            out.at[idx, "price_date"] = pd.Timestamp(prices.index[-1]).tz_localize(None) if getattr(prices.index[-1], "tzinfo", None) else pd.Timestamp(prices.index[-1])
+            if row["market"] == "US":
+                if usdkrw <= 0:
+                    raise ValueError("원/달러 환율 데이터 없음")
+                out.at[idx, "fx"] = usdkrw
+                out.at[idx, "fx_date"] = pd.Timestamp(fx.index[-1]).tz_localize(None) if getattr(fx.index[-1], "tzinfo", None) else pd.Timestamp(fx.index[-1])
+            else:
+                out.at[idx, "fx"] = 1.0
+                out.at[idx, "fx_date"] = out.at[idx, "price_date"]
             monthly = prices.resample("ME").last()
-            if len(monthly) >= 10:
-                out.at[idx, "sma10"] = float(monthly.tail(10).mean())
+            if len(monthly) >= sma_period:
+                out.at[idx, "sma10"] = float(monthly.tail(sma_period).mean())
             if len(monthly) >= 13:
                 out.at[idx, "momentum12"] = float(monthly.iloc[-1] / monthly.iloc[-13] - 1)
             recent = prices.tail(120)
             if len(recent) >= 20:
                 out.at[idx, "drawdown120"] = float(recent.iloc[-1] / recent.max() - 1)
+            out.at[idx, "price_status"] = "정상"
         except Exception as exc:
+            out.at[idx, "price_status"] = "오류"
             warnings.append(f"{ticker}: {exc}")
     return out, warnings
 
@@ -91,12 +112,29 @@ def _params(strategies: pd.DataFrame, code: str) -> tuple[str, dict]:
 
 def validate_configuration(holdings: pd.DataFrame, strategies: pd.DataFrame) -> list[str]:
     warnings = []
+    duplicate_codes = strategies[strategies.duplicated(["code"], keep=False)]["code"].astype(str).drop_duplicates().tolist()
+    if duplicate_codes:
+        warnings.append("중복 전략 코드: " + ", ".join(duplicate_codes))
+    blank = holdings[holdings["ticker"].fillna("").astype(str).str.strip().eq("")]
+    if not blank.empty:
+        labels = blank[["strategy", "name"]].astype(str).agg("/".join, axis=1).tolist()
+        warnings.append("티커가 비어 있는 종목: " + ", ".join(labels))
+    strategy_codes = set(strategies["code"].fillna("").astype(str))
+    holding_codes = set(holdings["strategy"].fillna("").astype(str))
+    missing_rules = sorted(code for code in holding_codes - strategy_codes if code)
+    if missing_rules:
+        warnings.append("전략 규칙이 없는 보유내역: " + ", ".join(missing_rules))
     duplicates = holdings[holdings.duplicated(["strategy", "ticker"], keep=False) & holdings["ticker"].astype(str).ne("")]
     if not duplicates.empty:
         pairs = duplicates[["strategy", "ticker"]].drop_duplicates().astype(str).agg("/".join, axis=1)
         warnings.append("중복 종목: " + ", ".join(pairs))
     for code, group in holdings.groupby("strategy", sort=False):
         rule, params = _params(strategies, code)
+        targets = pd.to_numeric(group["target_pct"], errors="coerce")
+        if targets.isna().any() or (targets < 0).any() or (targets > 100).any():
+            warnings.append(f"{code}: 목표비중은 0~100 사이의 숫자여야 합니다.")
+        if rule in {"sma_filter_rebalance", "momentum_rotate", "drawdown_buy"} and "CASH" not in set(group["ticker"].astype(str)):
+            warnings.append(f"{code}: 규칙 실행에 필요한 CASH 행이 없습니다.")
         if rule in {"static", "sma_filter_rebalance"}:
             total = pd.to_numeric(group["target_pct"], errors="coerce").fillna(0).sum()
             if abs(total - 100) > .1:
@@ -105,11 +143,94 @@ def validate_configuration(holdings: pd.DataFrame, strategies: pd.DataFrame) -> 
             allocation = float(params.get("winner_share", .8)) + float(params.get("cash_winner_share", .2))
             if abs(allocation - 1) > .001:
                 warnings.append(f"{code}: 1위 자산과 현금 비중의 합이 {allocation:.1%}입니다.")
-        if rule == "drawdown_shift":
+        if rule in {"drawdown_buy", "drawdown_shift"}:
             stock = str(params.get("stock_ticker") or params.get("signal", {}).get("ticker", ""))
+            if rule == "drawdown_buy" and not params.get("stock_ticker"):
+                stock = str(group.loc[group["ticker"].astype(str) != "CASH", "ticker"].iloc[0]) if (group["ticker"].astype(str) != "CASH").any() else ""
             if stock and stock not in set(group["ticker"].astype(str)):
                 warnings.append(f"{code}: 주식 티커 {stock}가 구성 종목에 없습니다.")
     return warnings
+
+
+def validate_snapshot_history(snapshots: pd.DataFrame, as_of: date) -> list[str]:
+    if snapshots.empty:
+        return []
+    df = snapshots.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    warnings: list[str] = []
+    invalid_dates = int(df["date"].isna().sum())
+    if invalid_dates:
+        warnings.append(f"Snapshots: 날짜를 읽을 수 없는 행이 {invalid_dates}개 있습니다.")
+    key_columns = [column for column in ["date", "strategy", "ticker"] if column in df.columns]
+    if len(key_columns) == 3 and df.duplicated(key_columns, keep=False).any():
+        warnings.append("Snapshots: 같은 날짜·전략·티커가 중복되어 성과가 부풀려질 수 있습니다.")
+    if (df["date"].dt.date == as_of).any():
+        warnings.append(f"Snapshots에 {as_of.isoformat()} 기록이 이미 있습니다. 기존 해당 날짜 행을 교체한 뒤 붙여넣으세요.")
+    return warnings
+
+
+def validate_market_data(priced: pd.DataFrame, as_of: date, max_stale_days: int = 7) -> tuple[list[str], list[str]]:
+    """Return blocking errors and non-blocking warnings for a month-end run."""
+    errors: list[str] = []
+    warnings: list[str] = []
+    if priced.empty:
+        return ["활성화된 보유 종목이 없습니다."], warnings
+    for row in priced.itertuples():
+        ticker = str(row.ticker)
+        if ticker == "CASH":
+            continue
+        close = pd.to_numeric(pd.Series([getattr(row, "close", np.nan)]), errors="coerce").iloc[0]
+        if pd.isna(close) or float(close) <= 0:
+            errors.append(f"{row.strategy}/{ticker}: 유효한 종가가 없습니다.")
+            continue
+        price_date = pd.to_datetime(getattr(row, "price_date", None), errors="coerce")
+        if pd.isna(price_date):
+            errors.append(f"{row.strategy}/{ticker}: 실제 가격 기준일을 확인할 수 없습니다.")
+        else:
+            age = (pd.Timestamp(as_of) - price_date.normalize()).days
+            if age < 0:
+                errors.append(f"{row.strategy}/{ticker}: 기준일 이후 가격이 사용되었습니다.")
+            elif age > max_stale_days:
+                warnings.append(f"{row.strategy}/{ticker}: 가격이 {age}일 전({price_date.date()}) 데이터입니다.")
+        if str(getattr(row, "market", "KR")) == "US":
+            fx_value = pd.to_numeric(pd.Series([getattr(row, "fx", np.nan)]), errors="coerce").iloc[0]
+            if pd.isna(fx_value) or float(fx_value) <= 0:
+                errors.append(f"{row.strategy}/{ticker}: 원/달러 환율이 없습니다.")
+    return list(dict.fromkeys(errors)), list(dict.fromkeys(warnings))
+
+
+def prior_month_comparison(view: pd.DataFrame, snapshots: pd.DataFrame, as_of: date) -> tuple[pd.DataFrame, pd.Timestamp | None]:
+    columns = ["전략", "지난달평가액", "현재평가액", "증감액", "증감률(%)"]
+    if view.empty or snapshots.empty:
+        return pd.DataFrame(columns=columns), None
+    history = snapshots.copy()
+    history["date"] = pd.to_datetime(history["date"], errors="coerce")
+    history["value"] = pd.to_numeric(history["value"], errors="coerce")
+    history = history[history["date"].notna() & (history["date"] < pd.Timestamp(as_of))]
+    if history.empty:
+        return pd.DataFrame(columns=columns), None
+    prior_date = history["date"].max()
+    previous = history[history["date"] == prior_date].groupby("strategy", as_index=False)["value"].sum()
+    previous = previous.rename(columns={"strategy": "전략", "value": "지난달평가액"})
+    current = view.groupby("strategy", as_index=False)["평가액"].sum().rename(columns={"strategy": "전략", "평가액": "현재평가액"})
+    result = current.merge(previous, on="전략", how="outer").fillna(0)
+    result["증감액"] = result["현재평가액"] - result["지난달평가액"]
+    result["증감률(%)"] = np.where(result["지난달평가액"] > 0, result["증감액"] / result["지난달평가액"] * 100, np.nan)
+    return result.reindex(columns=columns), prior_date
+
+
+def category_history(snapshots: pd.DataFrame) -> pd.DataFrame:
+    columns = ["date", "category", "value", "weight_pct"]
+    if snapshots.empty:
+        return pd.DataFrame(columns=columns)
+    df = snapshots.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    df = df.dropna(subset=["date", "category", "value"])
+    grouped = df.groupby(["date", "category"], as_index=False)["value"].sum()
+    totals = grouped.groupby("date")["value"].transform("sum")
+    grouped["weight_pct"] = np.where(totals > 0, grouped["value"] / totals * 100, 0)
+    return grouped.reindex(columns=columns)
 
 
 def build_action_plan(view: pd.DataFrame, strategies: pd.DataFrame, as_of: date) -> pd.DataFrame:
@@ -129,6 +250,7 @@ def build_action_plan(view: pd.DataFrame, strategies: pd.DataFrame, as_of: date)
             notes = {str(r.ticker): str(params.get("hold_note", "장기보유 · 매매 없음")) for r in sub.itertuples()}
         elif rule == "sma_filter_rebalance":
             quarter_end = as_of.month in {3, 6, 9, 12}
+            restore_now = quarter_end if bool(params.get("quarter_end_restore", True)) else True
             filtered = set(map(str, params.get("sma_tickers", [])))
             for r in non_cash.itertuples():
                 ticker = str(r.ticker)
@@ -136,9 +258,9 @@ def build_action_plan(view: pd.DataFrame, strategies: pd.DataFrame, as_of: date)
                 if breached:
                     target_values[ticker] = 0.0
                     notes[ticker] = "SMA 이탈 → 현금화"
-                elif quarter_end:
+                elif restore_now:
                     target_values[ticker] = total * float(r.target_pct) / 100
-                    notes[ticker] = "목표비중 복원(분기말)"
+                    notes[ticker] = "목표비중 복원(분기말)" if quarter_end else "목표비중 복원(월말)"
                 else:
                     notes[ticker] = "유지(분기중)"
             if "CASH" in target_values:
@@ -182,7 +304,8 @@ def build_action_plan(view: pd.DataFrame, strategies: pd.DataFrame, as_of: date)
             triggered = dd is not None and dd <= threshold
             if rule == "drawdown_buy":
                 cash_rows = sub[sub["ticker"] == "CASH"]
-                stock_rows = non_cash
+                selected_stock = str(params.get("stock_ticker", ""))
+                stock_rows = non_cash[non_cash["ticker"].astype(str) == selected_stock] if selected_stock else non_cash.head(1)
                 if not stock_rows.empty and not cash_rows.empty:
                     stock_ticker = str(stock_rows.iloc[0]["ticker"])
                     cash_current = float(cash_rows["평가액"].sum())
@@ -210,13 +333,18 @@ def build_action_plan(view: pd.DataFrame, strategies: pd.DataFrame, as_of: date)
             target_value = float(target_values.get(str(r.ticker), r.평가액))
             amount = target_value - float(r.평가액)
             unit_krw = float(r.close) * float(r.fx)
-            qty = round(amount / unit_krw, 4) if unit_krw > 0 and r.ticker != "CASH" else 0.0
+            if unit_krw > 0 and r.ticker != "CASH":
+                raw_qty = amount / unit_krw
+                qty = float(round(raw_qty)) if str(r.market) == "KR" else round(raw_qty, 4)
+                qty = max(qty, -float(r.shares))
+            else:
+                qty = 0.0
             side = "매수" if amount > 1000 else ("매도" if amount < -1000 else "유지")
             rows.append({"실행": False, "전략": code, "티커": r.ticker, "종목": r.name,
                          "구분": side, "현재평가액": float(r.평가액), "목표평가액": target_value,
-                         "예상매매액": amount, "제안수량": qty, "실제수량": 0.0,
+                         "예상매매액": amount, "제안수량": qty, "실제수량": 0.0, "실제체결금액": 0.0,
                          "근거": notes.get(str(r.ticker), "유지"), "메모": ""})
-    columns = ["실행", "전략", "티커", "종목", "구분", "현재평가액", "목표평가액", "예상매매액", "제안수량", "실제수량", "근거", "메모"]
+    columns = ["실행", "전략", "티커", "종목", "구분", "현재평가액", "목표평가액", "예상매매액", "제안수량", "실제수량", "실제체결금액", "근거", "메모"]
     return pd.DataFrame(rows, columns=columns)
 
 
@@ -240,13 +368,25 @@ def performance_summary(snapshots: pd.DataFrame) -> tuple[pd.DataFrame, dict[str
     return equity, {"cagr": cagr, "mdd": mdd, "volatility": volatility, "sharpe": sharpe}
 
 
-def comparison_history(snapshots: pd.DataFrame, benchmark_tickers: list[str]) -> tuple[pd.DataFrame, list[str]]:
+def comparison_history(snapshots: pd.DataFrame, benchmark_tickers: list[str],
+                       cashflows: pd.DataFrame | None = None) -> tuple[pd.DataFrame, list[str]]:
     equity, _ = performance_summary(snapshots)
     if equity.empty:
         return pd.DataFrame(columns=["date", "series", "value"]), []
     start, end = equity["date"].min(), equity["date"].max() + pd.Timedelta(days=5)
-    base = equity.copy()
-    base["portfolio"] = base["portfolio"] / base["portfolio"].iloc[0] * 100
+    base = equity.copy().sort_values("date")
+    index_values = [100.0]
+    flows = cashflows.copy() if cashflows is not None else pd.DataFrame()
+    if not flows.empty:
+        flows["date"] = pd.to_datetime(flows["date"], errors="coerce")
+        flows["amount"] = pd.to_numeric(flows["amount"], errors="coerce").fillna(0)
+    for i in range(1, len(base)):
+        d0, d1 = pd.Timestamp(base.iloc[i-1]["date"]), pd.Timestamp(base.iloc[i]["date"])
+        v0, v1 = float(base.iloc[i-1]["portfolio"]), float(base.iloc[i]["portfolio"])
+        period_flow = flows[(flows["date"] > d0) & (flows["date"] <= d1)]["amount"].sum() if not flows.empty else 0.0
+        period_return = (v1 - v0 - period_flow) / v0 if v0 > 0 else 0.0
+        index_values.append(index_values[-1] * (1 + period_return))
+    base["portfolio"] = index_values
     result = [base.rename(columns={"portfolio": "value"}).assign(series="내 포트폴리오")]
     warnings = []
     for ticker in benchmark_tickers:
