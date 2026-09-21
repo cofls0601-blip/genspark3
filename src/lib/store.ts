@@ -49,6 +49,9 @@ export const ALL_KV_KEYS = [
   'price_mode',
   'recent_tickers',
   'favorite_tickers',
+  // 월말 리밸런싱 '실행 원장' — 계획을 실제로 반영한 기록.
+  // 다음 달 계산의 기준이 되는 종목별 보유수량 변동을 그대로 남긴다.
+  'rebalances',
 ] as const
 
 /** 검색으로 추가한 종목 기록 (최근 사용 / 즐겨찾기) */
@@ -183,6 +186,7 @@ export function defaultState(): Record<string, any> {
     price_mode: 'close',
     recent_tickers: [],
     favorite_tickers: [],
+    rebalances: [],
   }
 }
 
@@ -209,6 +213,7 @@ const DEFAULT_MAP: Record<string, any> = {
   price_mode: 'close',
   recent_tickers: [],
   favorite_tickers: [],
+  rebalances: [],
 }
 
 function fallbackFor(k: string, specs: Record<string, Spec>): any {

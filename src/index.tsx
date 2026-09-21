@@ -10,6 +10,8 @@ import { bootstrap } from './api/bootstrap'
 import { plan } from './api/plan'
 import { crud } from './api/crud'
 import { history } from './api/history'
+import { rebalance } from './api/rebalance'
+import { templates } from './api/templates'
 import { fail, type AppEnv } from './api/helpers'
 
 const app = new Hono<AppEnv>()
@@ -21,6 +23,8 @@ app.route('/api', bootstrap)
 app.route('/api', plan)
 app.route('/api', crud)
 app.route('/api', history)
+app.route('/api', rebalance)
+app.route('/api', templates)
 
 app.get('/api/health', (c) => c.json({ ok: true, ts: Date.now() }))
 

@@ -10,9 +10,11 @@ import {
   RULE_FRIENDLY_NAME,
   RULE_UI_SCHEMA,
   migrateLegacyRoleParams,
+  ruleChoices,
   weightMetaOf,
 } from '../lib/specs'
 import { ALLOC_LABEL, INDICATOR_LABEL, DEFAULT_VISUAL_PARAMS, describeCondition } from '../lib/conditions'
+import { templateList } from '../lib/templates'
 
 export const bootstrap = new Hono<AppEnv>()
 
@@ -30,6 +32,7 @@ bootstrap.get('/bootstrap', async (c) => {
   const customBenchmarks = (await getState<Record<string, string>>(env, 'custom_benchmarks', specs)) || {}
   const recentTickers = (await getState<any[]>(env, 'recent_tickers', specs)) || []
   const favoriteTickers = (await getState<any[]>(env, 'favorite_tickers', specs)) || []
+  const rebalances = (await getState<any[]>(env, 'rebalances', specs)) || []
 
   // 구버전 역할명 기반 파라미터는 화면 표시용으로 실제 티커를 역참조해 미리 채워준다
   // (엔진은 구버전 키도 계속 읽으므로 저장하지 않아도 동작은 그대로 유지된다).
@@ -62,8 +65,17 @@ bootstrap.get('/bootstrap', async (c) => {
     customBenchmarks,
     recentTickers,
     favoriteTickers,
+    rebalances,
+    // 문헌 전략 템플릿 (정적/동적) — 설정 화면의 템플릿 선택기가 그대로 소비한다.
+    templates: templateList(),
     categories: CATEGORY_OPTIONS,
-    ruleMeta: { desc: RULE_DESC, friendly: RULE_FRIENDLY_NAME, uiSchema: RULE_UI_SCHEMA },
+    ruleMeta: {
+      desc: RULE_DESC,
+      friendly: RULE_FRIENDLY_NAME,
+      uiSchema: RULE_UI_SCHEMA,
+      // 설정 화면의 규칙 드롭다운은 이 목록을 그대로 쓴다(코드에 전략별로 하드코딩하지 않는다).
+      choices: ruleChoices(),
+    },
     // 전략별 '종목별 목표% 입력이 필요한가' — 설정 UI 의 입력칸 표시와 검증에 쓴다.
     weightMeta: weightMetaOf(specs),
     visualMeta: {

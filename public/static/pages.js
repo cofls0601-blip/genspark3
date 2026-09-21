@@ -68,6 +68,27 @@
     }))
   }
 
+  /** 실행 원장 목록 (부트스트랩에 실려온다) */
+  const ledgerOf = () => stateOf().rebalances || []
+
+  /** 계획 행에서 매매가 발생한 것만 실행 항목으로 뽑는다 */
+  function execItems() {
+    return (plan()?.plan || [])
+      .filter((r) => Math.abs(n(r['매매액(+매수/-매도)'])) > 1000)
+      .map((r) => {
+        const sig = (plan()?.signalRows || []).find((s) => s.전략 === r.전략 && s.티커 === r.티커)
+        return {
+          strategy: r.전략,
+          ticker: r.티커,
+          name: r.ETF || r.티커,
+          amount: n(r['매매액(+매수/-매도)']),
+          target_value: n(r.목표금액),
+          price: r.티커 === 'CASH' ? 1 : n(sig?.종가),
+          note: r.비고 || '',
+        }
+      })
+  }
+
   /** 직전 기록 대비 증감 */
   function vsPrevious() {
     const h = (stateOf().history || []).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)))
@@ -100,9 +121,16 @@
             ${p ? ` · ${p.quarterEnd ? '<span class="text-blue-600 font-semibold">분기말 복원 시점</span>' : '분기중(유지 모드)'}` : ''}
           </p>
         </div>
-        <button class="btn btn-p" data-act="planRefresh" ${U.S.planLoading ? 'disabled' : ''}>
-          <i class="fas fa-rotate ${U.S.planLoading ? 'spin' : ''}"></i> 최신 가격으로 계획 만들기
-        </button>
+        <div class="flex items-center gap-2 flex-wrap">
+          <label class="flex items-center gap-1.5">
+            <span class="text-[12px] font-semibold text-slate-600 dark:text-slate-300 whitespace-nowrap">기준일</span>
+            <input type="date" class="inp !py-1.5 !text-[13px]" value="${esc(U.S.planDate || p?.date || boot.today || '')}" data-onchange="setPlanDate" />
+          </label>
+          ${U.btn('<i class="fas fa-calendar-day"></i> 이 달 말', 'useMonthEnd', 'btn-s !py-1.5')}
+          <button class="btn btn-p" data-act="planRefresh" ${U.S.planLoading ? 'disabled' : ''}>
+            <i class="fas fa-rotate ${U.S.planLoading ? 'spin' : ''}"></i> 최신 가격으로 계획 만들기
+          </button>
+        </div>
       </div>`
 
     if (!p) return head + U.empty('아직 계획이 없습니다. 위 버튼으로 최신 가격을 불러오세요.', 'planRefresh', '계획 만들기')
@@ -144,12 +172,81 @@
       warnBanner() +
       metrics +
       actionCard +
+      execCard() +
       (excluded.length
         ? `<div class="text-[12px] text-slate-500 dark:text-slate-400">금액이 1,000원 미만이라 목록에서 제외된 항목 ${excluded.length}건: ${excluded
             .map((r) => `${esc(r.전략)}/${esc(r.ETF || r.티커)}`)
             .join(', ')}</div>`
         : '')
     )
+  }
+
+  /**
+   * 실행 반영 카드 — 계획의 매매를 실제 보유수량에 적용하고 원장에 남긴다.
+   * 여기서 바뀐 수량이 '다음 달 말 계산의 기준'이 되므로, 무엇이 얼마나 바뀌는지 미리 보여준다.
+   */
+  function execCard() {
+    const items = execItems()
+    const date = U.S.planDate || plan()?.date || U.S.today()
+    const busy = !!U.S.execBusy
+    const buySum = items.filter((x) => x.amount > 0).reduce((a, x) => a + x.amount, 0)
+    const sellSum = items.filter((x) => x.amount < 0).reduce((a, x) => a + x.amount, 0)
+    const last = ledgerOf()
+      .slice()
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.created_at).localeCompare(String(a.created_at)))[0]
+
+    const preview = items.length
+      ? `<div class="tbl-wrap"><table class="w-full text-[12.5px]">
+          <thead class="bg-slate-50 dark:bg-slate-800/50 text-slate-500"><tr>
+            <th class="text-left px-2.5 py-2 font-semibold">전략/종목</th>
+            <th class="text-right px-2.5 py-2 font-semibold">매매금액</th>
+            <th class="text-right px-2.5 py-2 font-semibold">수량 변동</th>
+            <th class="text-right px-2.5 py-2 font-semibold">보유수량 변화</th>
+          </tr></thead><tbody>${items
+            .map((x) => {
+              const a = (stateOf().assets || []).find((y) => y.strategy === x.strategy && y.ticker === x.ticker)
+              const before = n(a?.shares)
+              const price = x.ticker === 'CASH' ? 1 : n(x.price)
+              const delta = price > 0 ? x.amount / price : 0
+              const after = x.ticker === 'CASH' ? before + x.amount : before + delta
+              const tone = x.amount > 0 ? 'text-green-600' : 'text-red-600'
+              return `<tr class="border-t border-slate-100 dark:border-slate-800">
+                <td class="px-2.5 py-2"><b>${esc(x.strategy)}</b> <span class="text-slate-500">${esc(x.name)}</span> <span class="text-slate-400">${esc(x.ticker)}</span></td>
+                <td class="px-2.5 py-2 text-right tnum font-semibold ${tone}">${x.amount > 0 ? '+' : ''}${esc(U.won(x.amount))}</td>
+                <td class="px-2.5 py-2 text-right tnum ${tone}">${x.ticker === 'CASH' ? '—' : (delta > 0 ? '+' : '') + delta.toFixed(2)}</td>
+                <td class="px-2.5 py-2 text-right tnum text-slate-500">${esc(x.ticker === 'CASH' ? U.won(before) : before.toFixed(2))} → <b class="text-slate-800 dark:text-slate-100">${esc(x.ticker === 'CASH' ? U.won(after) : after.toFixed(2))}</b></td>
+              </tr>`
+            })
+            .join('')}</tbody></table></div>`
+      : `<div class="p-6 text-center text-sm text-slate-500 dark:text-slate-400">🟢 반영할 매매가 없습니다.</div>`
+
+    return `<div class="card bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm mb-4 overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 flex-wrap">
+        <div>
+          <div class="font-extrabold flex items-center gap-2"><i class="fas fa-clipboard-check text-blue-600"></i> 실행 반영 (보유수량 확정)</div>
+          <div class="text-[12px] text-slate-500 dark:text-slate-400 mt-0.5">
+            기준일 <b class="tnum">${esc(date)}</b> 종가로 위 매매를 실제 보유수량에 반영합니다. 여기서 확정된 수량이 <b>다음 달 말 계산의 기준</b>이 됩니다.
+          </div>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <label class="flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300">
+            <input type="checkbox" class="w-4 h-4 accent-blue-600" ${U.S.execRound ? 'checked' : ''} data-onchange="execToggleRound" />
+            주식 수량 정수 반올림
+          </label>
+          <button class="btn btn-p" data-act="execApply" ${busy || !items.length ? 'disabled' : ''}>
+            <i class="fas ${busy ? 'fa-circle-notch spin' : 'fa-check-to-slot'}"></i> 실행 반영하고 기록 남기기
+          </button>
+          ${U.btn('<i class="fas fa-clock-rotate-left"></i> 실행 기록 보기', 'goLedger', 'btn-s')}
+        </div>
+      </div>
+      <div class="px-4 py-2.5 bg-slate-50 dark:bg-slate-800/40 border-b border-slate-200 dark:border-slate-800 text-[12px] flex items-center gap-3 flex-wrap">
+        <span class="tnum">반영 항목 <b>${items.length}</b>건</span>
+        <span class="text-green-600 tnum font-semibold">매수 ${esc(U.won(buySum))}</span>
+        <span class="text-red-600 tnum font-semibold">매도 ${esc(U.won(Math.abs(sellSum)))}</span>
+        ${last ? `<span class="text-slate-500">최근 반영 ${esc(last.date)} (${esc(last.created_at)})</span>` : '<span class="text-slate-500">아직 실행 기록이 없습니다.</span>'}
+      </div>
+      ${preview}
+    </div>`
   }
 
   function actionGroup(g) {
@@ -228,6 +325,219 @@
     } catch (err) {
       U.toast(err.message, 'err')
       el.checked = !done
+    }
+  }
+
+  /* ── 기준일(매월 말 종가) 선택 ── */
+  ACTIONS.setPlanDate = async (e, el) => {
+    U.S.planDate = el.value || null
+    if (U.S.planDate) await U.refreshPlan(true, U.S.planDate)
+    else U.render()
+  }
+
+  ACTIONS.useMonthEnd = async (e, el) => {
+    const target = U.monthEnd(U.S.planDate || U.today())
+    U.S.planDate = target
+    await U.refreshPlan(true, target)
+  }
+
+  /* ── 실행 반영 ── */
+  ACTIONS.execToggleRound = (e, el) => {
+    U.S.execRound = !!el.checked
+  }
+
+  ACTIONS.execApply = async (e, el) => {
+    const items = execItems()
+    if (!items.length) return U.toast('반영할 매매가 없습니다.', 'warn')
+    const date = U.S.planDate || plan()?.date || U.today()
+    const buySum = items.filter((x) => x.amount > 0).reduce((a, x) => a + x.amount, 0)
+    const sellSum = items.filter((x) => x.amount < 0).reduce((a, x) => a + x.amount, 0)
+    const ok = window.confirm(
+      `${date} 종가 기준으로 ${items.length}건을 반영합니다.\n\n` +
+        `· 매수 ${Math.round(buySum).toLocaleString('ko-KR')}원\n` +
+        `· 매도 ${Math.abs(Math.round(sellSum)).toLocaleString('ko-KR')}원\n\n` +
+        `보유수량이 이 값으로 확정되고, 실행 기록에 남습니다. 계속할까요?`,
+    )
+    if (!ok) return
+    U.S.execBusy = true
+    el.disabled = true
+    U.render()
+    try {
+      const r = await U.api.post('/api/rebalance/apply', {
+        date,
+        round_shares: !!U.S.execRound,
+        note: U.S.execRound ? '주식 수량 정수 반올림' : '',
+        items: items.map((x) => ({
+          strategy: x.strategy,
+          ticker: x.ticker,
+          amount: x.amount,
+          target_value: x.target_value,
+          price: x.price,
+          note: x.note,
+        })),
+      })
+      U.S.boot = await U.api.get('/api/bootstrap')
+      U.S.plan = null
+      U.toast(`실행을 반영했습니다 (${r.record.summary.items}건 · ${date}). 다음 계산의 기준이 됩니다.`)
+      await U.refreshPlan(false)
+    } catch (err) {
+      U.toast(err.message, 'err')
+    } finally {
+      U.S.execBusy = false
+      U.render()
+    }
+  }
+
+  ACTIONS.goLedger = () => {
+    U.S.page = 'ledger'
+    U.render()
+    window.scrollTo({ top: 0 })
+  }
+
+  ACTIONS.goToday = () => {
+    U.S.page = 'today'
+    U.render()
+    window.scrollTo({ top: 0 })
+  }
+
+  ACTIONS.goSettings = () => {
+    U.S.page = 'settings'
+    U.render()
+    window.scrollTo({ top: 0 })
+  }
+
+  /* ── 템플릿(문헌 전략) 선택 ── */
+  ACTIONS.tplKind = (e, el) => {
+    U.S.tplKind = el.dataset.kind
+    U.S.tplPick = null
+    U.render()
+  }
+
+  ACTIONS.tplPick = (e, el) => {
+    const id = el.dataset.id
+    U.S.tplPick = U.S.tplPick === id ? null : id
+    U.S.tplOverrides = null
+    U.render()
+  }
+
+  ACTIONS.tplToggleKr = (e, el) => {
+    U.S.tplUseKr = !!el.checked
+    U.render()
+  }
+
+  ACTIONS.tplAccount = (e, el) => {
+    U.S.tplAccount = el.value
+  }
+
+  ACTIONS.tplOverride = (e, el) => {
+    U.S.tplOverrides = U.S.tplOverrides || {}
+    U.S.tplOverrides[el.dataset.ticker] = n(el.value)
+  }
+
+  ACTIONS.tplReset = (e, el) => {
+    U.S.tplOverrides = null
+    U.S.tplPick = null
+    U.render()
+  }
+
+  ACTIONS.tplCreate = async (e, el) => {
+    const id = el.dataset.id
+    if (!id) return
+    el.disabled = true
+    try {
+      const r = await U.api.post('/api/strategies/from-template', {
+        template_id: id,
+        code: (U.S.tplCode || '').trim() || undefined,
+        account: U.S.tplAccount || undefined,
+        use_kr: !!U.S.tplUseKr,
+        overrides: U.S.tplOverrides || {},
+      })
+      U.S.boot = await U.api.get('/api/bootstrap')
+      U.S.editingCode = r.code
+      U.S.ruleDraft = null
+      U.S.tplPick = null
+      U.S.tplOverrides = null
+      U.S.tplCode = ''
+      U.toast(`템플릿 “${r.template.name}” 으로 전략 ${r.code} 을(를) 만들었습니다. 자유롭게 가감하세요.`)
+      U.render()
+    } catch (err) {
+      U.toast(err.message, 'err')
+      el.disabled = false
+    }
+  }
+
+  ACTIONS.tplCode = (e, el) => {
+    U.S.tplCode = el.value
+  }
+
+  ACTIONS.tplApplyToCurrent = async (e, el) => {
+    const id = el.dataset.id
+    const code = U.S.editingCode
+    if (!id || !code) return
+    if (!window.confirm(`전략 ${code} 의 규칙과 자산 목록을 이 템플릿으로 교체할까요?\n(보유수량은 종목이 일치하면 유지됩니다)`)) return
+    el.disabled = true
+    try {
+      const r = await U.api.post(`/api/strategies/${encodeURIComponent(code)}/apply-template`, { template_id: id })
+      U.S.boot = await U.api.get('/api/bootstrap')
+      U.S.ruleDraft = null
+      U.toast(`전략 ${code} 에 템플릿을 적용했습니다.`)
+      U.render()
+    } catch (err) {
+      U.toast(err.message, 'err')
+      el.disabled = false
+    }
+  }
+
+  ACTIONS.ledgerToggle = (e, el) => {
+    const id = el.dataset.id
+    U.S.ledgerOpen = U.S.ledgerOpen === id ? null : id
+    U.render()
+  }
+
+  ACTIONS.ledgerRefresh = async () => {
+    U.S.boot = await U.api.get('/api/bootstrap')
+    U.toast('실행 기록을 새로고침했습니다.')
+    U.render()
+  }
+
+  ACTIONS.ledgerDelete = async (e, el) => {
+    const id = el.dataset.id
+    if (!window.confirm('이 실행 기록을 삭제할까요? (보유수량은 그대로 유지됩니다)')) return
+    try {
+      await U.api.del(`/api/rebalances/${encodeURIComponent(id)}`)
+      U.S.boot = await U.api.get('/api/bootstrap')
+      U.toast('실행 기록을 삭제했습니다.')
+      U.render()
+    } catch (err) {
+      U.toast(err.message, 'err')
+    }
+  }
+
+  ACTIONS.ledgerRevert = async (e, el) => {
+    const id = el.dataset.id
+    if (!window.confirm('이 실행을 되돌려 보유수량을 반영 전으로 복원할까요?')) return
+    try {
+      const r = await U.api.post('/api/rebalance/revert', { id })
+      U.S.boot = await U.api.get('/api/bootstrap')
+      U.S.plan = null
+      U.toast(`실행을 되돌렸습니다.${r.warnings && r.warnings.length ? ` (경고 ${r.warnings.length}건)` : ''}`)
+      await U.refreshPlan(false)
+    } catch (err) {
+      U.toast(err.message, 'err')
+    }
+  }
+
+  ACTIONS.snapshotFromLedger = async (e, el) => {
+    const date = el.dataset.date
+    el.disabled = true
+    try {
+      const rec = await U.api.post('/api/history/snapshot', { date })
+      U.S.boot = await U.api.get('/api/bootstrap')
+      U.toast(`기록을 저장했습니다 (${rec.record.date} · ${U.won(rec.record.total)})`)
+      U.render()
+    } catch (err) {
+      U.toast(err.message, 'err')
+      el.disabled = false
     }
   }
 
@@ -1292,8 +1602,113 @@
       infoCard +
       (d.rule === 'visual' ? visualBuilder(d) : legacyBuilder(d)) +
       assetEditor(d) +
+      templatePicker(d) +
       globalSettings(boot)
     )
+  }
+
+  /**
+   * 문헌 전략 템플릿 선택기 — 정적/동적으로 나눠 보여주고, 골라서 새 전략을 만들거나
+   * 현재 전략에 적용한다. 비중은 여기서 가감한 뒤 설정 화면에서 더 다듬으면 된다.
+   */
+  function templatePicker(d) {
+    const tpls = stateOf().templates || []
+    if (!tpls.length) return ''
+    const kind = U.S.tplKind || 'static'
+    const list = tpls.filter((t) => t.kind === kind)
+    const pickId = U.S.tplPick
+    const pick = list.find((t) => t.id === pickId) || null
+    const ov = U.S.tplOverrides || {}
+    const useKr = !!U.S.tplUseKr
+
+    const tabs = `<div class="flex gap-1.5 mb-3">
+      ${['static', 'dynamic']
+        .map((k) => {
+          const cnt = tpls.filter((t) => t.kind === k).length
+          const label = k === 'static' ? `정적 배분 (${cnt})` : `동적 배분 (${cnt})`
+          return `<button class="btn ${kind === k ? 'btn-p' : 'btn-s'} !py-1.5 !px-3 !text-[12.5px]" data-act="tplKind" data-kind="${k}">${label}</button>`
+        })
+        .join('')}
+    </div>`
+
+    const cards = list
+      .map((t) => {
+        const active = t.id === pickId
+        return `<li class="border-t border-slate-100 dark:border-slate-800">
+        <button class="w-full text-left px-4 py-3 ${active ? 'bg-blue-50 dark:bg-blue-950/30' : ''}" data-act="tplPick" data-id="${esc(t.id)}">
+          <div class="font-semibold text-[13.5px] flex items-center gap-2 flex-wrap">
+            <i class="fas fa-chevron-${active ? 'down' : 'right'} text-slate-400 text-[11px]"></i>
+            ${esc(t.name)}
+            <span class="text-[11px] font-normal bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-1.5 py-0.5 rounded">${esc(t.family)}</span>
+          </div>
+          <div class="text-[11.5px] text-slate-500 dark:text-slate-400 mt-0.5">${esc(t.trait)} · ${esc(t.rebalance)}</div>
+          <div class="text-[11px] text-slate-400 mt-0.5">출처: ${esc(t.source)}</div>
+        </button>
+        ${
+          active
+            ? `<div class="px-4 pb-4 pt-1 bg-blue-50 dark:bg-blue-950/30">
+                <p class="text-[12.5px] text-slate-600 dark:text-slate-300 mb-3">${esc(t.description)}</p>
+                <div class="tbl-wrap mb-3"><table class="w-full text-[12.5px]">
+                  <thead class="bg-white/70 dark:bg-slate-900/60 text-slate-500"><tr>
+                    <th class="text-left px-2 py-2 font-semibold">종목</th>
+                    <th class="text-left px-2 py-2 font-semibold">역할</th>
+                    <th class="text-right px-2 py-2 font-semibold">목표%</th>
+                  </tr></thead><tbody>${t.assets
+                    .map((a) => {
+                      const pct = Object.prototype.hasOwnProperty.call(ov, a.ticker) ? ov[a.ticker] : a.target_pct
+                      const showTicker = useKr && a.kr_ticker ? a.kr_ticker : a.ticker
+                      const showName = useKr && a.kr_name ? a.kr_name : a.name
+                      return `<tr class="border-t border-slate-100 dark:border-slate-800">
+                      <td class="px-2 py-1.5">${esc(showName)} <span class="text-slate-400">${esc(showTicker)}</span>
+                        ${a.kr_ticker ? `<span class="text-[10.5px] text-slate-400">(KR: ${esc(a.kr_ticker)})</span>` : ''}</td>
+                      <td class="px-2 py-1.5 text-slate-500">${esc(a.role)}</td>
+                      <td class="px-2 py-1.5 text-right">${
+                        t.usesWeights
+                          ? `<input type="number" step="0.5" class="inp !py-1 !text-[12px] !w-20 text-right" value="${n(pct)}" data-oninput="tplOverride" data-ticker="${esc(a.ticker)}" />`
+                          : `<span class="text-slate-400" title="규칙이 비중을 정합니다">—</span>`
+                      }</td>
+                    </tr>`
+                    })
+                    .join('')}</tbody></table></div>
+                <div class="flex items-center gap-2 flex-wrap">
+                  ${
+                    t.stats.krConvertible
+                      ? `<label class="flex items-center gap-1.5 text-[12px] text-slate-600 dark:text-slate-300">
+                          <input type="checkbox" class="w-4 h-4 accent-blue-600" ${useKr ? 'checked' : ''} data-onchange="tplToggleKr" />
+                          한국 상장 ETF 로 변환 (${t.stats.krConvertible}종목)
+                        </label>`
+                      : ''
+                  }
+                  <input class="inp !py-1.5 !text-[12.5px] !w-36" placeholder="전략 코드 (자동)" value="${esc(U.S.tplCode || '')}" data-oninput="tplCode" />
+                  <input class="inp !py-1.5 !text-[12.5px] !w-44" placeholder="계좌 이름" value="${esc(U.S.tplAccount || '')}" data-oninput="tplAccount" />
+                  <button class="btn btn-p !py-1.5" data-act="tplCreate" data-id="${esc(t.id)}"><i class="fas fa-plus"></i> 이 템플릿으로 새 전략</button>
+                  ${U.btn('<i class="fas fa-arrows-rotate"></i> 비중 초기화', 'tplReset', 'btn-s !py-1.5')}
+                  ${U.btn(`<i class="fas fa-right-left"></i> ${esc(d.code)} 에 적용`, 'tplApplyToCurrent', 'btn-s !py-1.5', `data-id="${esc(t.id)}"`)}
+                </div>
+                ${
+                  t.usesWeights
+                    ? `<div class="text-[11.5px] text-slate-500 dark:text-slate-400 mt-2 tnum">현재 합계 ${t.assets
+                        .reduce((s, a) => s + n(Object.prototype.hasOwnProperty.call(ov, a.ticker) ? ov[a.ticker] : a.target_pct), 0)
+                        .toFixed(1)}% — 생성 후 설정 화면에서 자유롭게 가감하세요.</div>`
+                    : `<div class="text-[11.5px] text-blue-700 dark:text-blue-300 mt-2">이 전략은 규칙이 비중을 정합니다. 생성 후 규칙 파라미터를 조정하세요.</div>`
+                }
+              </div>`
+            : ''
+        }
+      </li>`
+      })
+      .join('')
+
+    return `<div class="card bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm mb-3">
+      <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-800">
+        <div class="font-extrabold flex items-center gap-2"><i class="fas fa-book-open text-blue-600"></i> 문헌 전략 템플릿</div>
+        <div class="text-[12px] text-slate-500 dark:text-slate-400 mt-0.5">
+          올웨더·영구·60/40 같은 정적 배분과 HAA·LAA·DGA 같은 동적 배분을 그대로 불러와 출발점으로 삼으세요. 비중·종목을 가감해 자기 전략으로 만들면 됩니다.
+        </div>
+      </div>
+      <div class="p-4 pb-0">${tabs}</div>
+      <ul class="border-b border-slate-200 dark:border-slate-800">${cards}</ul>
+    </div>`
   }
 
   function globalSettings(boot) {
@@ -1780,6 +2195,103 @@
     } catch (err) {
       U.toast(err.message, 'err')
     }
+  }
+
+  /* ═══════════════════════════ 실행 기록 (원장) ═══════════════════════════ */
+  PAGES.ledger = function () {
+    const boot = stateOf()
+    const list = ledgerOf()
+      .slice()
+      .sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(b.created_at).localeCompare(String(a.created_at)))
+
+    const totalBuy = list.reduce((a, r) => a + (n(r.summary?.buy) || 0), 0)
+    const totalSell = list.reduce((a, r) => a + Math.abs(n(r.summary?.sell) || 0), 0)
+    const latest = list[0] || null
+
+    const head = U.sectionTitle(
+      '실행 기록',
+      '매월 말 종가로 확정한 매매와 그 결과 바뀐 보유수량을 남깁니다. 여기 기록된 수량이 다음 달 계산의 기준입니다.',
+    )
+
+    const metrics = `<div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5 mb-4">
+      ${U.metric('실행 기록', `${list.length}건`, latest ? `최근 ${esc(latest.date)}` : '아직 없음')}
+      ${U.metric('누적 매수', U.won(totalBuy), `${list.filter((r) => n(r.summary?.buy) > 0).length}회`)}
+      ${U.metric('누적 매도', U.won(totalSell), `${list.filter((r) => n(r.summary?.sell) < 0).length}회`)}
+      ${U.metric('최근 반영 총자산', latest ? U.won(latest.total_after) : '—', latest ? `반영 전 ${U.won(latest.total_before)}` : '')}
+    </div>`
+
+    const card = (r) => {
+      const open = U.S.ledgerOpen === r.id
+      const reverted = !!r.reverted_at
+      const items = r.items || []
+      const stratSums = Object.entries(r.by_strategy || {})
+      return `<li class="border-b border-slate-100 dark:border-slate-800 last:border-0">
+        <div class="px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+          <button class="flex-1 min-w-0 text-left" data-act="ledgerToggle" data-id="${esc(r.id)}">
+            <div class="font-semibold tnum flex items-center gap-2 flex-wrap">
+              <i class="fas fa-chevron-${open ? 'down' : 'right'} text-slate-400 text-[11px]"></i>
+              ${esc(r.date)}
+              <span class="text-[11px] bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 px-1.5 py-0.5 rounded font-normal">${items.length}건</span>
+              ${reverted ? '<span class="text-[11px] bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300 px-1.5 py-0.5 rounded font-normal">되돌림</span>' : ''}
+            </div>
+            <div class="text-[12px] text-slate-500 dark:text-slate-400 mt-0.5 tnum">
+              ${esc(r.created_at)} 기록
+              ${r.summary?.buy ? ` · <span class="text-green-600">매수 ${esc(U.won(r.summary.buy))}</span>` : ''}
+              ${r.summary?.sell ? ` · <span class="text-red-600">매도 ${esc(U.won(Math.abs(r.summary.sell)))}</span>` : ''}
+              ${stratSums.length ? ` · ${stratSums.map(([k]) => esc(k)).join('/')}` : ''}
+              ${r.note ? ` · ${esc(r.note)}` : ''}
+            </div>
+          </button>
+          <div class="flex gap-1.5 shrink-0">
+            ${U.btn('<i class="fas fa-bookmark"></i> 이 날짜 스냅샷', 'snapshotFromLedger', 'btn-s !py-1 !px-2 !text-[12px]', `data-date="${esc(r.date)}"`)}
+            ${reverted ? '' : U.btn('<i class="fas fa-rotate-left"></i> 되돌리기', 'ledgerRevert', 'btn-s !py-1 !px-2 !text-[12px]', `data-id="${esc(r.id)}"`)}
+            <button class="btn btn-d !py-1 !px-2 !text-[12px]" data-act="ledgerDelete" data-id="${esc(r.id)}"><i class="fas fa-trash"></i></button>
+          </div>
+        </div>
+        ${
+          open
+            ? `<div class="tbl-wrap border-t border-slate-100 dark:border-slate-800"><table class="w-full text-[12.5px]">
+                <thead class="bg-slate-50 dark:bg-slate-800/50 text-slate-500"><tr>
+                  <th class="text-left px-2.5 py-2 font-semibold">전략</th>
+                  <th class="text-left px-2.5 py-2 font-semibold">종목</th>
+                  <th class="text-right px-2.5 py-2 font-semibold">적용가</th>
+                  <th class="text-right px-2.5 py-2 font-semibold">매매금액</th>
+                  <th class="text-right px-2.5 py-2 font-semibold">수량 변동</th>
+                  <th class="text-right px-2.5 py-2 font-semibold">보유수량</th>
+                </tr></thead><tbody>${items
+                  .map(
+                    (it) => `<tr class="border-t border-slate-100 dark:border-slate-800">
+                    <td class="px-2.5 py-2 font-semibold">${esc(it.strategy)}</td>
+                    <td class="px-2.5 py-2">${esc(it.name || it.ticker)} <span class="text-slate-400">${esc(it.ticker)}</span>
+                      ${it.note ? `<div class="text-[11px] text-slate-500">${esc(it.note)}</div>` : ''}</td>
+                    <td class="px-2.5 py-2 text-right tnum text-slate-500">${it.ticker === 'CASH' ? '—' : n(it.price).toLocaleString('ko-KR')}</td>
+                    <td class="px-2.5 py-2 text-right tnum font-semibold ${n(it.amount) > 0 ? 'text-green-600' : 'text-red-600'}">${n(it.amount) > 0 ? '+' : ''}${esc(U.won(it.amount))}</td>
+                    <td class="px-2.5 py-2 text-right tnum ${n(it.amount) > 0 ? 'text-green-600' : 'text-red-600'}">${it.ticker === 'CASH' ? '—' : (n(it.shares_delta) > 0 ? '+' : '') + n(it.shares_delta).toFixed(2)}</td>
+                    <td class="px-2.5 py-2 text-right tnum text-slate-500">${it.ticker === 'CASH' ? esc(U.won(it.shares_before)) : n(it.shares_before).toFixed(2)} → <b class="text-slate-800 dark:text-slate-100">${it.ticker === 'CASH' ? esc(U.won(it.shares_after)) : n(it.shares_after).toFixed(2)}</b></td>
+                  </tr>`,
+                  )
+                  .join('')}</tbody></table></div>
+              <div class="px-4 py-2.5 bg-slate-50 dark:bg-slate-800/40 text-[12px] text-slate-500 dark:text-slate-400 tnum">
+                반영 전 총자산 ${esc(U.won(r.total_before))} → 반영 후 ${esc(U.won(r.total_after))}
+                ${r.fx_rate ? ` · USD/KRW ${n(r.fx_rate).toFixed(1)}` : ''}
+                · 기준 종가 ${Object.entries(r.closes || {}).slice(0, 6).map(([k, v]) => `${esc(k)} ${n(v).toLocaleString('ko-KR')}`).join(' · ')}${Object.keys(r.closes || {}).length > 6 ? ' …' : ''}
+              </div>`
+            : ''
+        }
+      </li>`
+    }
+
+    const body = list.length
+      ? `<div class="card bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+          <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 flex-wrap">
+            <div class="font-extrabold flex items-center gap-2"><i class="fas fa-clipboard-check text-blue-600"></i> 실행 원장 <span class="text-[12px] font-normal text-slate-500">${list.length}건</span></div>
+            ${U.btn('<i class="fas fa-arrows-rotate"></i> 새로고침', 'ledgerRefresh', 'btn-s')}
+          </div>
+          <ul>${list.map(card).join('')}</ul>
+        </div>`
+      : U.empty('아직 실행 기록이 없습니다. [오늘] 탭에서 “실행 반영하고 기록 남기기”를 누르면 여기에 쌓입니다.', 'goToday', '오늘 탭으로')
+
+    return head + (list.length ? metrics : '') + body
   }
 
   /* ═══════════════════════════ 전략 비교 ═══════════════════════════ */

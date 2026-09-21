@@ -269,10 +269,34 @@ export function weightMetaOf(
 export const RULE_FRIENDLY_NAME: Record<string, string> = {
   static: '목표비중으로 맞추기',
   sma_filter_rebalance: '추세(SMA) 필터 + 정기 복원',
-  momentum_rotate: '모멘텀 1등 자산 선택',
+  momentum_rotate: '모멘텀 상위 자산 선택',
   drawdown_buy: '고점 대비 하락 시 분할매수',
   drawdown_shift: '고점 대비 하락 시 비중 전환',
   hold: '장기 보유(자동 리밸런싱 없음)',
+  // 노코드 빌더도 하나의 '규칙'이다. 여기에 없으면 규칙 드롭다운에 나타나지 않아
+  // 한 번 노코드로 전환한 전략은 내장 규칙으로 되돌아올 수 없다.
+  visual: '노코드 규칙 빌더(조건 직접 조립)',
+}
+
+/**
+ * 규칙 선택 드롭다운에 노출할 순서. RULE_FRIENDLY_NAME 의 키를 그대로 쓰되,
+ * 화면에서 먼저 보여주고 싶은 순서를 명시한다(누락된 규칙은 뒤에 자동 추가).
+ */
+export const RULE_ORDER: string[] = [
+  'static',
+  'sma_filter_rebalance',
+  'momentum_rotate',
+  'drawdown_buy',
+  'drawdown_shift',
+  'hold',
+  'visual',
+]
+
+/** 드롭다운/설정 화면용 규칙 목록 (등록된 규칙만, 순서 보장) */
+export function ruleChoices(): { v: string; t: string }[] {
+  const known = RULE_ORDER.filter((r) => RULE_FRIENDLY_NAME[r])
+  const rest = Object.keys(RULE_FRIENDLY_NAME).filter((r) => !known.includes(r))
+  return [...known, ...rest].map((r) => ({ v: r, t: RULE_FRIENDLY_NAME[r] }))
 }
 
 /**

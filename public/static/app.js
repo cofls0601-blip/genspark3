@@ -49,6 +49,22 @@ U.S = {
   undoStack: [],
   /** 가격 캐시 초기화 UI 상태 */
   cacheBusy: false,
+  /** 리밸런싱 계획을 만들 기준일 (기본 오늘). 매월 말 종가로 계산할 때 바꾼다 */
+  planDate: null,
+  /** 실행 원장 (최신순) */
+  rebalances: null,
+  /** 원장 상세로 펼친 기록 id */
+  ledgerOpen: null,
+  /** 실행 반영 진행 중 플래그 */
+  execBusy: false,
+  /** 실행 반영 시 주식 수량을 정수로 반올림할지 */
+  execRound: false,
+  /** 템플릿 화면 상태 */
+  tplKind: 'static',
+  tplPick: null,
+  tplUseKr: false,
+  tplOverrides: null,
+  tplAccount: '',
 }
 
 /* ───────────── 포맷 ───────────── */
@@ -148,6 +164,7 @@ U.empty = (msg, act, actLabel) =>
 const NAV = [
   { id: 'today', label: '오늘', icon: 'fa-bolt' },
   { id: 'portfolio', label: '포트폴리오', icon: 'fa-chart-pie' },
+  { id: 'ledger', label: '실행 기록', icon: 'fa-clipboard-check' },
   { id: 'history', label: '기록·성과', icon: 'fa-clock-rotate-left' },
   { id: 'compare', label: '전략 비교', icon: 'fa-scale-balanced' },
   { id: 'settings', label: '설정', icon: 'fa-sliders' },
@@ -240,22 +257,38 @@ async function boot() {
   }
 }
 
-/** 계획 계산 — 캐시 우선(기본) / 강제 새로고침 */
-U.refreshPlan = async (force) => {
+/** 계획 계산 — 캐시 우선(기본) / 강제 새로고침
+ *  date 를 지정하면 그 날짜(종가) 기준으로 계산한다. 매월 말 종가 기준 계산에 쓴다. */
+U.refreshPlan = async (force, date) => {
+  const day = date || U.S.planDate || null
   U.S.planLoading = true
   U.render()
   try {
-    U.S.plan = force ? await U.api.post('/api/plan/refresh', {}) : await U.api.get('/api/plan/quick')
+    U.S.plan = force ? await U.api.post('/api/plan/refresh', day ? { date: day } : {}) : await U.api.get('/api/plan/quick')
     if (U.S.plan.assets) U.S.boot.assets = U.S.plan.assets
     if (U.S.plan.strategies) U.S.boot.strategies = U.S.plan.strategies
     if (U.S.plan.warnings && U.S.plan.warnings.length) U.toast(`${U.S.plan.warnings.length}개 종목에 경고가 있습니다.`, 'warn')
-    else if (force) U.toast('최신 가격으로 다시 계산했습니다.')
+    else if (force) U.toast(day ? `${day} 종가로 계산했습니다.` : '최신 가격으로 다시 계산했습니다.')
   } catch (e) {
     U.toast(e.message, 'err')
   } finally {
     U.S.planLoading = false
     U.render()
   }
+}
+
+/** 그 달의 마지막 날 (YYYY-MM-DD) */
+U.monthEnd = (iso) => {
+  const d = new Date(`${iso || U.today()}T00:00:00Z`)
+  if (Number.isNaN(d.getTime())) return U.today()
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).toISOString().slice(0, 10)
+}
+
+/** 그 달의 첫 날 (YYYY-MM-DD) */
+U.monthStart = (iso) => {
+  const d = new Date(`${iso || U.today()}T00:00:00Z`)
+  if (Number.isNaN(d.getTime())) return U.today()
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString().slice(0, 10)
 }
 
 U.S.activeStrategies = () => (U.S.boot?.strategies || []).filter((c) => c.active !== false)
