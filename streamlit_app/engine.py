@@ -165,3 +165,54 @@ def build_action_plan(view: pd.DataFrame, strategies: pd.DataFrame, as_of: date)
                          "근거": notes.get(str(r.ticker), "목표비중 조정"), "메모": ""})
     columns = ["실행", "전략", "티커", "종목", "구분", "현재평가액", "예상매매액", "제안수량", "실제수량", "근거", "메모"]
     return pd.DataFrame(rows, columns=columns)
+
+
+def performance_summary(snapshots: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float | None]]:
+    if snapshots.empty:
+        return pd.DataFrame(columns=["date", "portfolio"]), {"cagr": None, "mdd": None, "volatility": None, "sharpe": None}
+    df = snapshots.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["value"] = pd.to_numeric(df["value"], errors="coerce").fillna(0.0)
+    equity = df.groupby("date", as_index=False)["value"].sum().rename(columns={"value": "portfolio"}).sort_values("date")
+    equity = equity[equity["portfolio"] > 0]
+    if len(equity) < 2:
+        return equity, {"cagr": None, "mdd": None, "volatility": None, "sharpe": None}
+    values = equity["portfolio"]
+    years = max((equity["date"].iloc[-1] - equity["date"].iloc[0]).days / 365.25, 1 / 12)
+    cagr = float((values.iloc[-1] / values.iloc[0]) ** (1 / years) - 1)
+    mdd = float((values / values.cummax() - 1).min())
+    returns = values.pct_change().dropna()
+    volatility = float(returns.std(ddof=1) * np.sqrt(12)) if len(returns) >= 2 else None
+    sharpe = float(returns.mean() / returns.std(ddof=1) * np.sqrt(12)) if len(returns) >= 2 and returns.std(ddof=1) > 0 else None
+    return equity, {"cagr": cagr, "mdd": mdd, "volatility": volatility, "sharpe": sharpe}
+
+
+def comparison_history(snapshots: pd.DataFrame, benchmark_tickers: list[str]) -> tuple[pd.DataFrame, list[str]]:
+    equity, _ = performance_summary(snapshots)
+    if equity.empty:
+        return pd.DataFrame(columns=["date", "series", "value"]), []
+    start, end = equity["date"].min(), equity["date"].max() + pd.Timedelta(days=5)
+    base = equity.copy()
+    base["portfolio"] = base["portfolio"] / base["portfolio"].iloc[0] * 100
+    result = [base.rename(columns={"portfolio": "value"}).assign(series="내 포트폴리오")]
+    warnings = []
+    for ticker in benchmark_tickers:
+        ticker = ticker.strip()
+        if not ticker:
+            continue
+        try:
+            raw = yf.download(ticker, start=start.date(), end=end.date(), auto_adjust=True, progress=False, threads=False)
+            if raw.empty:
+                raise ValueError("데이터 없음")
+            close = raw["Close"]
+            if isinstance(close, pd.DataFrame):
+                close = close.iloc[:, 0]
+            series = pd.DataFrame({"date": pd.to_datetime(close.index).tz_localize(None), "price": pd.to_numeric(close, errors="coerce")}).dropna()
+            matched = pd.merge_asof(equity[["date"]].sort_values("date"), series.sort_values("date"), on="date", direction="backward").dropna()
+            if matched.empty:
+                raise ValueError("기록일과 일치하는 가격 없음")
+            matched["value"] = matched["price"] / matched["price"].iloc[0] * 100
+            result.append(matched[["date", "value"]].assign(series=ticker))
+        except Exception as exc:
+            warnings.append(f"{ticker}: {exc}")
+    return pd.concat(result, ignore_index=True)[["date", "series", "value"]], warnings

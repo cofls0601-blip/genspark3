@@ -4,7 +4,7 @@ import io
 import json
 import re
 from datetime import date, datetime, timezone
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import pandas as pd
 
@@ -54,7 +54,7 @@ def load_default_strategies() -> pd.DataFrame:
     } for item in items], columns=STRATEGY_COLUMNS)
 
 
-def _google_csv_url(url: str) -> str:
+def _google_csv_url(url: str, sheet_name: str | None = None) -> str:
     match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", url)
     if not match:
         raise DataError("올바른 Google Sheets URL이 아닙니다.")
@@ -62,15 +62,40 @@ def _google_csv_url(url: str) -> str:
     query = parse_qs(parsed.query)
     fragment = parse_qs(parsed.fragment)
     gid = (query.get("gid") or fragment.get("gid") or ["0"])[0]
+    if sheet_name:
+        return f"https://docs.google.com/spreadsheets/d/{match.group(1)}/gviz/tq?tqx=out:csv&sheet={quote(sheet_name)}"
     return f"https://docs.google.com/spreadsheets/d/{match.group(1)}/export?format=csv&gid={gid}"
 
 
-def read_public_google_sheet(url: str, kind: str = "holdings") -> pd.DataFrame:
+def read_public_google_sheet(url: str, kind: str = "holdings", sheet_name: str | None = None) -> pd.DataFrame:
     try:
-        frame = pd.read_csv(_google_csv_url(url), dtype={"ticker": str})
+        frame = pd.read_csv(_google_csv_url(url, sheet_name), dtype={"ticker": str})
     except Exception as exc:
         raise DataError("시트를 읽지 못했습니다. 링크 공유가 '링크가 있는 모든 사용자: 뷰어'인지 확인하세요.") from exc
     return normalize_holdings(frame) if kind == "holdings" else normalize_strategies(frame)
+
+
+def read_optional_sheet(url: str, sheet_name: str, columns: list[str]) -> pd.DataFrame:
+    try:
+        frame = pd.read_csv(_google_csv_url(url, sheet_name), dtype={"ticker": str})
+        if not set(columns).issubset(frame.columns):
+            return pd.DataFrame(columns=columns)
+        return frame.reindex(columns=columns)
+    except Exception:
+        return pd.DataFrame(columns=columns)
+
+
+def read_workbook(url: str) -> dict[str, pd.DataFrame]:
+    try:
+        strategies = read_public_google_sheet(url, "strategies", "Strategies")
+    except DataError:
+        strategies = load_default_strategies()
+    return {
+        "holdings": read_public_google_sheet(url, "holdings", "Holdings"),
+        "strategies": strategies,
+        "snapshots": read_optional_sheet(url, "Snapshots", SNAPSHOT_COLUMNS),
+        "actions": read_optional_sheet(url, "Actions", ACTION_COLUMNS),
+    }
 
 
 def read_pasted_holdings(text: str) -> pd.DataFrame:
