@@ -19,19 +19,34 @@ from streamlit_app.data import (
 )
 from streamlit_app.engine import (
     build_action_plan, comparison_history, enrich_prices, performance_summary, portfolio_view,
-    sortino, twr, xirr,
+    sortino, twr, validate_configuration, xirr,
 )
 
 
 st.set_page_config(page_title="월말 자산배분 도우미", page_icon="📊", layout="wide")
 st.markdown("""<style>
-:root{--surface:#fff;--border:#e5e7eb;--muted:#6b7280}
-.weight-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:12px 13px;margin:8px 0}
+:root{--surface:#fff;--border:#e2e8f0;--muted:#64748b;--ink:#0f172a;--primary:#2563eb;--bg:#f6f8fc}
+.stApp{background:var(--bg);color:var(--ink)}
+.block-container{max-width:1280px;padding-top:1.15rem;padding-bottom:4rem}
+section[data-testid="stSidebar"]{background:#0f172a;border-right:1px solid #1e293b}
+section[data-testid="stSidebar"] *{color:#e2e8f0}
+.app-hero{background:linear-gradient(125deg,#0f172a 0%,#1e3a8a 62%,#2563eb 120%);color:white;border-radius:22px;padding:25px 28px;margin-bottom:18px;box-shadow:0 14px 35px rgba(15,23,42,.15)}
+.app-hero .eyebrow{font-size:.72rem;font-weight:750;letter-spacing:.13em;color:#93c5fd}
+.app-hero .title{font-size:1.85rem;font-weight:850;letter-spacing:-.04em;margin:.25rem 0}
+.app-hero .sub{font-size:.9rem;color:#cbd5e1}
+.weight-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:13px 14px;margin:8px 0;box-shadow:0 1px 3px rgba(15,23,42,.04)}
 .weight-head{display:flex;justify-content:space-between;gap:10px;font-weight:700}
 .weight-meta{font-size:.78rem;color:var(--muted);margin-top:5px}
 .weight-bar{height:12px;display:flex;overflow:hidden;border-radius:999px;background:#eef0f3;margin-top:9px}
-[data-testid="stMetric"]{border:1px solid #e5e7eb;border-radius:14px;padding:.8rem 1rem}
-@media(max-width:640px){.block-container{padding:.7rem}.stButton>button{width:100%}}
+[data-testid="stMetric"]{background:#fff;border:1px solid var(--border);border-radius:15px;padding:.85rem 1rem;box-shadow:0 1px 3px rgba(15,23,42,.04)}
+[data-testid="stMetricValue"]{font-weight:800;letter-spacing:-.03em}
+.stTabs [data-baseweb="tab-list"]{gap:.35rem;background:#eef2f7;border-radius:13px;padding:.35rem}
+.stTabs [data-baseweb="tab"]{height:2.65rem;border-radius:9px;padding:0 .85rem}
+.stTabs [aria-selected="true"]{background:#fff;color:var(--primary);box-shadow:0 1px 3px rgba(15,23,42,.08)}
+div[data-testid="stExpander"],div[data-testid="stDataFrame"]{border-color:var(--border);border-radius:14px;overflow:hidden}
+.stButton>button,.stDownloadButton>button{border-radius:10px;min-height:2.55rem;font-weight:650}
+h1,h2,h3,h4{letter-spacing:-.03em}
+@media(max-width:640px){.block-container{padding:.7rem}.stButton>button{width:100%}.app-hero{padding:19px 17px;border-radius:16px}.app-hero .title{font-size:1.38rem}.stTabs [data-baseweb="tab-list"]{overflow-x:auto}}
 </style>""", unsafe_allow_html=True)
 
 
@@ -79,8 +94,9 @@ if "cashflows" not in st.session_state:
 if "category_targets" not in st.session_state:
     st.session_state.category_targets = pd.DataFrame(columns=["category", "target_pct"])
 
-st.title("월말 자산배분 도우미")
-st.caption("금융계좌·Google Cloud 연결 없이 계산하고, 결과를 Google Sheets에 직접 붙여넣습니다.")
+st.markdown("""<div class="app-hero"><div class="eyebrow">PORTFOLIO REBALANCING</div>
+<div class="title">월말 자산배분 도우미</div>
+<div class="sub">지정일 종가 · 전략별 신호 · 실행 체크 · 성과 비교 · Google Sheets 수동 기록</div></div>""", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("월말 기준")
@@ -123,7 +139,7 @@ for warning in st.session_state.get("price_warnings", []):
     st.warning(warning)
 
 tab_dashboard, tab_plan, tab_holdings, tab_settings, tab_history, tab_export = st.tabs(
-    ["대시보드", "액션 플랜", "보유내역", "전략 설정", "기록·성과", "복사용 데이터"]
+    ["🏠 대시보드", "🔄 리밸런싱 실행", "📦 보유내역", "⚙️ 전략 설정", "📈 기록·성과", "📋 복사용 데이터"]
 )
 
 with tab_dashboard:
@@ -161,6 +177,7 @@ with tab_dashboard:
     fig = px.bar(
         chart, x="name", y=["현재비중", "target_pct"], barmode="group",
         labels={"value": "비중(%)", "name": "종목", "variable": "구분"}, height=430,
+        color_discrete_map={"현재비중": "#2563eb", "target_pct": "#94a3b8"},
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -194,9 +211,12 @@ with tab_plan:
         st.dataframe(show.style.map(trade_color, subset=["예상매매액"]), use_container_width=True, hide_index=True)
 
     st.markdown("### 실행 체크리스트")
+    actionable_plan = plan[pd.to_numeric(plan["예상매매액"], errors="coerce").abs() > 1000].copy()
+    if actionable_plan.empty:
+        st.success("실행할 매매가 없습니다.")
     edited_plan = st.data_editor(
-        plan, key="action_editor", use_container_width=True, hide_index=True,
-        disabled=[column for column in plan.columns if column not in {"실행", "실제수량", "메모"}],
+        actionable_plan, key="action_editor", use_container_width=True, hide_index=True,
+        disabled=[column for column in actionable_plan.columns if column not in {"실행", "실제수량", "메모"}],
         column_config={
             "실행": st.column_config.CheckboxColumn(),
             "예상매매액": st.column_config.NumberColumn(format="%,.0f원"),
@@ -248,6 +268,13 @@ with tab_holdings:
 with tab_settings:
     st.subheader("전략 구성과 규칙 설정")
     st.caption("변경값은 현재 세션에 적용되며, 아래 복사용 데이터에서 Strategies와 Holdings를 시트에 반영합니다.")
+    config_warnings = validate_configuration(holdings, strategies)
+    if config_warnings:
+        with st.expander(f"⚠️ 설정 점검 {len(config_warnings)}건", expanded=True):
+            for warning in config_warnings:
+                st.warning(warning)
+    else:
+        st.success("전략 구성과 비중 설정이 기본 검증을 통과했습니다.")
     rule_names = {
         "static": "정적 목표비중", "sma_filter_rebalance": "10개월 SMA 필터",
         "momentum_rotate": "모멘텀 1위 로테이션", "drawdown_buy": "낙폭 분할매수",
