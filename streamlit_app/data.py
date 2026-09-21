@@ -9,9 +9,11 @@ from urllib.parse import parse_qs, quote, urlparse
 import pandas as pd
 
 HOLDING_COLUMNS = ["strategy", "account", "ticker", "name", "market", "category", "role", "target_pct", "shares"]
-STRATEGY_COLUMNS = ["code", "rule", "params_json", "active"]
+STRATEGY_COLUMNS = ["code", "account", "description", "dynamic", "active", "annual_limit", "rule", "params_json"]
 SNAPSHOT_COLUMNS = ["date", "saved_at", "strategy", "account", "ticker", "name", "category", "close", "shares", "value", "weight_pct", "target_pct", "memo"]
 ACTION_COLUMNS = ["date", "saved_at", "strategy", "ticker", "name", "side", "planned_shares", "actual_shares", "planned_amount", "done", "reason", "memo"]
+CASHFLOW_COLUMNS = ["date", "amount", "memo", "strategy"]
+CATEGORY_TARGET_COLUMNS = ["category", "target_pct"]
 
 
 class DataError(RuntimeError):
@@ -35,10 +37,15 @@ def normalize_holdings(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_strategies(frame: pd.DataFrame) -> pd.DataFrame:
-    missing = [column for column in STRATEGY_COLUMNS if column not in frame.columns]
+    missing = [column for column in ["code", "rule", "params_json"] if column not in frame.columns]
     if missing:
         raise DataError(f"전략표에 필요한 열이 없습니다: {', '.join(missing)}")
-    return frame.reindex(columns=STRATEGY_COLUMNS).copy()
+    df = frame.copy()
+    defaults = {"account": "", "description": "", "dynamic": False, "active": True, "annual_limit": 0.0}
+    for column, value in defaults.items():
+        if column not in df:
+            df[column] = value
+    return df.reindex(columns=STRATEGY_COLUMNS).copy()
 
 
 def load_default_holdings() -> pd.DataFrame:
@@ -48,8 +55,15 @@ def load_default_holdings() -> pd.DataFrame:
 def load_default_strategies() -> pd.DataFrame:
     with open("config/default_strategies.json", encoding="utf-8") as handle:
         items = json.load(handle)
+    accounts = {"LAA": "과세 연금저축", "GSM": "비과세 연금저축", "ISA": "ISA", "SSO": "일반계좌 2", "EM": "일반계좌 1"}
+    descriptions = {
+        "LAA": "10개월 SMA 필터와 분기말 목표비중 복원", "GSM": "SMA 통과 후보 중 12개월 모멘텀 1위",
+        "ISA": "나스닥 낙폭 트리거 분할매수", "SSO": "S&P500 낙폭 트리거 비중전환", "EM": "신흥국 분산 장기보유",
+    }
     return pd.DataFrame([{
-        "code": item["code"], "rule": item["rule"],
+        "code": item["code"], "account": accounts.get(item["code"], item["code"]),
+        "description": descriptions.get(item["code"], ""), "dynamic": item["rule"] == "momentum_rotate",
+        "active": True, "annual_limit": 0.0, "rule": item["rule"],
         "params_json": json.dumps(item.get("params", {}), ensure_ascii=False), "active": True,
     } for item in items], columns=STRATEGY_COLUMNS)
 
@@ -95,6 +109,8 @@ def read_workbook(url: str) -> dict[str, pd.DataFrame]:
         "strategies": strategies,
         "snapshots": read_optional_sheet(url, "Snapshots", SNAPSHOT_COLUMNS),
         "actions": read_optional_sheet(url, "Actions", ACTION_COLUMNS),
+        "cashflows": read_optional_sheet(url, "Cashflows", CASHFLOW_COLUMNS),
+        "category_targets": read_optional_sheet(url, "CategoryTargets", CATEGORY_TARGET_COLUMNS),
     }
 
 

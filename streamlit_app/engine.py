@@ -216,3 +216,61 @@ def comparison_history(snapshots: pd.DataFrame, benchmark_tickers: list[str]) ->
         except Exception as exc:
             warnings.append(f"{ticker}: {exc}")
     return pd.concat(result, ignore_index=True)[["date", "series", "value"]], warnings
+
+
+def xirr(equity: pd.DataFrame, cashflows: pd.DataFrame) -> float | None:
+    if equity.empty or cashflows.empty or len(equity) < 2:
+        return None
+    eq = equity.sort_values("date")
+    last_date, last_value = pd.Timestamp(eq.iloc[-1]["date"]), float(eq.iloc[-1]["portfolio"])
+    flows = []
+    for row in cashflows.itertuples():
+        try:
+            dt, amount = pd.Timestamp(row.date), -float(row.amount)
+            if dt < last_date and amount:
+                flows.append((dt, amount))
+        except Exception:
+            continue
+    flows.append((last_date, last_value))
+    if len(flows) < 2 or not any(v < 0 for _, v in flows) or not any(v > 0 for _, v in flows):
+        return None
+    d0 = min(d for d, _ in flows)
+    def npv(rate):
+        return sum(value / (1 + rate) ** ((dt-d0).days / 365.25) for dt, value in flows)
+    lo, hi = -.9999, 100.0
+    if npv(lo) * npv(hi) > 0:
+        return None
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        if npv(mid) > 0: lo = mid
+        else: hi = mid
+    return (lo + hi) / 2
+
+
+def twr(equity: pd.DataFrame, cashflows: pd.DataFrame) -> float | None:
+    if equity.empty or len(equity) < 2:
+        return None
+    eq = equity.sort_values("date").copy()
+    cf = cashflows.copy()
+    if not cf.empty:
+        cf["date"] = pd.to_datetime(cf["date"], errors="coerce")
+        cf["amount"] = pd.to_numeric(cf["amount"], errors="coerce").fillna(0)
+    returns = []
+    for i in range(1, len(eq)):
+        d0, d1 = pd.Timestamp(eq.iloc[i-1]["date"]), pd.Timestamp(eq.iloc[i]["date"])
+        v0, v1 = float(eq.iloc[i-1]["portfolio"]), float(eq.iloc[i]["portfolio"])
+        flows = cf[(cf["date"] > d0) & (cf["date"] <= d1)]["amount"].sum() if not cf.empty else 0
+        if v0 > 0:
+            returns.append((v1 - v0 - flows) / v0)
+    return float(np.prod([1+r for r in returns])-1) if returns else None
+
+
+def sortino(equity: pd.DataFrame) -> float | None:
+    if equity.empty or len(equity) < 3:
+        return None
+    returns = equity.sort_values("date")["portfolio"].pct_change().dropna()
+    downside = returns[returns < 0]
+    if downside.empty:
+        return None
+    deviation = float(np.sqrt((downside**2).mean()))
+    return float(returns.mean() / deviation * np.sqrt(12)) if deviation else None

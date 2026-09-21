@@ -17,6 +17,8 @@ streamlit run streamlit_app.py
 - `Strategies`: 전략별 규칙과 파라미터
 - `Snapshots`: 매월 말 포트폴리오 상태
 - `Actions`: 리밸런싱 계획과 실제 실행 이력
+- `Cashflows`: 입출금 원장
+- `CategoryTargets`: 전체 자산군 목표비중
 
 `Holdings` 탭의 첫 행은 다음 열 이름을 사용합니다.
 
@@ -38,6 +40,9 @@ strategy account ticker name market category role target_pct shares
 - 전략별 종목 구성과 목표비중 편집
 - LAA SMA 필터, GSM 모멘텀, 낙폭 분할매수·비중전환, 보유 유지 규칙 설정
 - 월말 종가 기준 리밸런싱 액션 계산
+- 전략별 현재 상태 및 리밸런싱 필요도 표시
+- 목표 충족(초록), 미달(파랑), 초과(빨강) 비중 막대
+- 전략 추가·삭제, 계좌명·설명·활성화, 구성 종목과 목표비중 편집
 - 월별 스냅샷 및 실행 이력 조회
 - CAGR, MDD, 연환산 변동성, Sharpe 계산
 - QQQ, SPY, KOSPI200 및 사용자 티커 벤치마크 비교
@@ -50,5 +55,7 @@ strategy account ticker name market category role target_pct shares
 - 액션 및 실제 실행 이력
 - 현재 보유내역
 - 전략 설정
+- 입출금 원장
+- 자산군 목표비중
 
 앱은 Google Sheets에 직접 데이터를 쓰지 않습니다.
