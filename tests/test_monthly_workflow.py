@@ -130,7 +130,7 @@ class MonthlyWorkflowTests(unittest.TestCase):
         self.assertTrue(any("중복" in item for item in warnings))
         self.assertTrue(any("이미" in item for item in warnings))
 
-    def test_month_exports_include_price_lineage_and_asset_summary(self):
+    def test_month_exports_keep_existing_sheet_schema_and_asset_summary(self):
         view = pd.DataFrame([{
             "strategy": "A", "account": "계좌", "ticker": "AAA", "name": "주식", "category": "선진국 주식",
             "price_date": pd.Timestamp("2026-09-29"), "close": 1_000.4, "fx": 1, "shares": 10,
@@ -142,9 +142,8 @@ class MonthlyWorkflowTests(unittest.TestCase):
         }])
         snapshots, actions = export_month(date(2026, 9, 30), view, plan, "월말")
         summary = export_category_month(date(2026, 9, 30), view, "월말")
-        self.assertIn("price_date", snapshots.columns)
-        self.assertIn("fx", snapshots.columns)
-        self.assertIn("actual_amount", actions.columns)
+        self.assertEqual(list(snapshots.columns), ["date", "saved_at", "strategy", "account", "ticker", "name", "category", "close", "shares", "value", "weight_pct", "target_pct", "memo"])
+        self.assertEqual(list(actions.columns), ["date", "saved_at", "strategy", "ticker", "name", "side", "planned_shares", "actual_shares", "planned_amount", "done", "reason", "memo"])
         self.assertEqual(summary.iloc[0]["value"], 10_004)
         self.assertEqual(summary.iloc[0]["weight_pct"], 100)
 
