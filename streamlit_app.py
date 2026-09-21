@@ -9,9 +9,11 @@ import streamlit as st
 
 from streamlit_app.data import (
     DataError,
+    export_category_month,
     export_month,
     load_default_holdings,
     load_default_strategies,
+    next_holdings_after_execution,
     read_pasted_holdings,
     read_workbook,
     to_csv_bytes,
@@ -23,17 +25,22 @@ import streamlit_app.engine as allocation_engine
 # Streamlit Community Cloud can keep imported modules alive while pulling a new
 # commit.  Reload the calculation engine when a newly deployed symbol is not yet
 # present in that process, so the UI and engine can never run as mixed versions.
-if not hasattr(allocation_engine, "validate_configuration"):
+required_engine_symbols = {"validate_configuration", "validate_market_data", "validate_snapshot_history", "prior_month_comparison", "category_history"}
+if not required_engine_symbols.issubset(set(dir(allocation_engine))):
     allocation_engine = importlib.reload(allocation_engine)
 
 build_action_plan = allocation_engine.build_action_plan
 comparison_history = allocation_engine.comparison_history
+category_history = allocation_engine.category_history
 enrich_prices = allocation_engine.enrich_prices
 performance_summary = allocation_engine.performance_summary
 portfolio_view = allocation_engine.portfolio_view
+prior_month_comparison = allocation_engine.prior_month_comparison
 sortino = allocation_engine.sortino
 twr = allocation_engine.twr
 validate_configuration = allocation_engine.validate_configuration
+validate_market_data = allocation_engine.validate_market_data
+validate_snapshot_history = allocation_engine.validate_snapshot_history
 xirr = allocation_engine.xirr
 
 
@@ -68,8 +75,14 @@ def won(value: float) -> str:
     return f"{value:,.0f}원"
 
 
-def weight_card(name: str, current: float, target: float, amount: float) -> None:
-    current, target = max(0.0, current), max(0.0, target)
+def weight_card(name: str, current: float, target: float | None, amount: float) -> None:
+    current = max(0.0, current)
+    if target is None:
+        st.markdown(f'<div class="weight-card"><div class="weight-head"><span>{name}</span><span>{current:.1f}%</span></div>'
+                    f'<div class="weight-meta">{won(amount)} · 장기보유 · 리밸런싱 없음</div>'
+                    f'<div class="weight-bar"><div style="width:{min(current, 100)}%;background:#64748b"></div></div></div>', unsafe_allow_html=True)
+        return
+    target = max(0.0, target)
     scale = max(100.0, current, target, 1.0)
     green, blue, red = min(current, target) / scale * 100, max(target-current, 0) / scale * 100, max(current-target, 0) / scale * 100
     bars = "".join([
@@ -139,22 +152,78 @@ active_mask = ~strategies["active"].astype(str).str.lower().isin(["false", "0", 
 active_codes = set(strategies.loc[active_mask, "code"].astype(str))
 active_holdings = holdings[holdings["strategy"].astype(str).isin(active_codes)].copy()
 
-if refresh or "priced_holdings" not in st.session_state:
+price_context = (as_of.isoformat(), price_mode)
+if refresh or "priced_holdings" not in st.session_state or st.session_state.get("price_context") != price_context:
     with st.spinner("Yahoo Finance에서 종가를 조회하고 있습니다..."):
-        priced, warnings = enrich_prices(active_holdings, as_of, adjusted=price_mode == "수정종가")
+        priced, warnings = enrich_prices(
+            active_holdings, as_of, adjusted=price_mode == "수정종가", strategies=strategies,
+        )
         st.session_state.priced_holdings = priced
         st.session_state.price_warnings = warnings
+        st.session_state.price_context = price_context
 
 priced = st.session_state.priced_holdings.copy()
 view = portfolio_view(priced)
 plan = build_action_plan(view, strategies, as_of)
+config_warnings = validate_configuration(holdings, strategies)
+market_errors, market_warnings = validate_market_data(priced, as_of)
+history_warnings = validate_snapshot_history(st.session_state.snapshots, as_of)
+run_blockers = config_warnings + market_errors + history_warnings
 
 for warning in st.session_state.get("price_warnings", []):
     st.warning(warning)
+for warning in market_warnings:
+    st.warning(warning)
 
-tab_dashboard, tab_plan, tab_holdings, tab_settings, tab_history, tab_export = st.tabs(
-    ["🏠 대시보드", "🔄 리밸런싱 실행", "📦 보유내역", "⚙️ 전략 설정", "📈 기록·성과", "📋 복사용 데이터"]
+tab_workflow, tab_dashboard, tab_plan, tab_holdings, tab_settings, tab_history, tab_export = st.tabs(
+    ["✅ 월말 마감", "🏠 대시보드", "🔄 리밸런싱 실행", "📦 보유내역", "⚙️ 전략 설정", "📈 기록·성과", "📋 복사용 데이터"]
 )
+
+with tab_workflow:
+    st.subheader("이번 달 마감 흐름")
+    st.caption("지난달 보유수량 → 기준일 종가 평가 → 전략 규칙 적용 → 다음 거래일 주문 → 월별 기록 순서입니다.")
+    latest_dates = pd.to_datetime(priced.loc[priced["ticker"] != "CASH", "price_date"], errors="coerce").dropna()
+    effective_date = latest_dates.max().date().isoformat() if not latest_dates.empty else "—"
+    actionable_count = int(((plan["티커"] != "CASH") & (pd.to_numeric(plan["예상매매액"], errors="coerce").abs() > 1000)).sum())
+    w1, w2, w3, w4 = st.columns(4)
+    w1.metric("1 · 보유 종목", f"{len(active_holdings):,}개")
+    w2.metric("2 · 실제 가격일", effective_date)
+    w3.metric("3 · 주문 후보", f"{actionable_count:,}건")
+    w4.metric("4 · 마감 상태", "확인 필요" if run_blockers else "기록 가능")
+
+    if run_blockers:
+        st.error("아래 문제를 해결하기 전에는 주문안과 월말 기록을 확정하지 마세요.")
+        for issue in run_blockers:
+            st.warning(issue)
+    else:
+        st.success("가격·환율·전략 설정 기본 검증을 통과했습니다. 리밸런싱 실행 탭에서 주문안을 확인하세요.")
+
+    st.markdown("### 지난 기록 대비 평가액 변화")
+    month_change, prior_date = prior_month_comparison(view, st.session_state.snapshots, as_of)
+    if month_change.empty:
+        st.info("이전 Snapshots 기록이 없어 지난달 비교는 이번 기록 이후부터 표시됩니다.")
+    else:
+        st.caption(f"비교 기준: {prior_date.date()} · 입출금과 매매가 포함된 평가액 변화이며 순수 투자수익률은 기록·성과 탭에서 확인합니다.")
+        st.dataframe(month_change, use_container_width=True, hide_index=True, column_config={
+            "지난달평가액": st.column_config.NumberColumn(format="%,.0f원"),
+            "현재평가액": st.column_config.NumberColumn(format="%,.0f원"),
+            "증감액": st.column_config.NumberColumn(format="%,.0f원"),
+            "증감률(%)": st.column_config.NumberColumn(format="%.2f%%"),
+        })
+
+    st.markdown("### 현재 자산군 구성")
+    workflow_categories = view.groupby("category", as_index=False)["평가액"].sum()
+    workflow_categories["비중"] = workflow_categories["평가액"] / max(float(workflow_categories["평가액"].sum()), 1) * 100
+    st.dataframe(workflow_categories, use_container_width=True, hide_index=True, column_config={
+        "평가액": st.column_config.NumberColumn(format="%,.0f원"),
+        "비중": st.column_config.NumberColumn(format="%.1f%%"),
+    })
+
+    st.markdown("### 마감 순서")
+    st.markdown("1. **대시보드**에서 전략별 현재비중과 자산군 구성을 확인합니다.  \n"
+                "2. **리밸런싱 실행**에서 매수·매도 대상과 계산 근거를 확인합니다. 장기보유 전략은 주문이 생성되지 않습니다.  \n"
+                "3. 다음 거래일 주문 후 실제수량과 실제체결금액을 입력하고 실행을 체크합니다.  \n"
+                "4. **복사용 데이터**에서 이번 달 스냅샷과 액션을 누적하고, 다음 달 보유내역으로 Holdings를 교체합니다.")
 
 with tab_dashboard:
     total = float(view["평가액"].sum()) if not view.empty else 0
@@ -168,9 +237,13 @@ with tab_dashboard:
     for code, group in view.groupby("strategy", sort=False):
         cfg = strategies.loc[strategies["code"].astype(str) == str(code)]
         account = str(cfg.iloc[0]["account"]) if not cfg.empty else str(code)
+        rule_value = str(cfg.iloc[0]["rule"]) if not cfg.empty else "static"
         with st.expander(f"{code} · {account} · {won(group['평가액'].sum())}", expanded=True):
+            if rule_value == "hold":
+                st.caption("장기보유 전략 · 현재 평가만 기록하며 목표비중 복원 주문을 만들지 않습니다.")
             for row in group.itertuples():
-                weight_card(str(row.name or row.ticker), float(row.현재비중), float(row.target_pct), float(row.평가액))
+                target = None if rule_value == "hold" else float(row.target_pct)
+                weight_card(str(row.name or row.ticker), float(row.현재비중), target, float(row.평가액))
 
     left, right = st.columns(2)
     with left:
@@ -187,13 +260,17 @@ with tab_dashboard:
         st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("목표 대비 괴리")
-    chart = view[view["ticker"] != "CASH"].copy()
-    fig = px.bar(
-        chart, x="name", y=["현재비중", "target_pct"], barmode="group",
-        labels={"value": "비중(%)", "name": "종목", "variable": "구분"}, height=430,
-        color_discrete_map={"현재비중": "#2563eb", "target_pct": "#94a3b8"},
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    target_rules = dict(zip(strategies["code"].astype(str), strategies["rule"].astype(str)))
+    chart = view[(view["ticker"] != "CASH") & view["strategy"].astype(str).map(target_rules).ne("hold")].copy()
+    if chart.empty:
+        st.info("목표비중을 복원하는 활성 전략이 없습니다.")
+    else:
+        fig = px.bar(
+            chart, x="name", y=["현재비중", "target_pct"], barmode="group",
+            labels={"value": "비중(%)", "name": "종목", "variable": "구분"}, height=430,
+            color_discrete_map={"현재비중": "#2563eb", "target_pct": "#94a3b8"},
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("전체 자산군 분포")
     categories = view.groupby("category", as_index=False)["평가액"].sum()
@@ -208,7 +285,7 @@ with tab_plan:
     st.caption("계획은 참고값입니다. 주문 전 가격·세금·수수료와 실제 주문 가능 수량을 확인하세요.")
     memo = st.text_area("이번 달 판단 메모", key="month_memo", placeholder="시장 상황, 예외 처리, 실행하지 않은 이유 등을 기록하세요.")
     st.markdown("### 전략별 현재 상태")
-    signal_cols = view[["strategy", "ticker", "close", "sma10", "momentum12"]].copy()
+    signal_cols = view[["strategy", "ticker", "close", "sma10", "sma_period", "momentum12", "price_date"]].copy()
     detailed = plan.merge(signal_cols, left_on=["전략", "티커"], right_on=["strategy", "ticker"], how="left")
     detailed["목표평가액"] = detailed["현재평가액"] + detailed["예상매매액"]
     for code, group in detailed.groupby("전략", sort=False):
@@ -219,13 +296,14 @@ with tab_plan:
         m1.metric("현재", won(group["현재평가액"].sum()))
         m2.metric("목표", won(group["목표평가액"].sum()))
         m3.metric("순매매", won(group["예상매매액"].sum()))
-        show = group[["티커", "종목", "close", "sma10", "momentum12", "현재평가액", "목표평가액", "예상매매액", "근거"]].copy()
+        show = group[["티커", "종목", "price_date", "close", "sma_period", "sma10", "momentum12", "현재평가액", "목표평가액", "예상매매액", "근거"]].copy()
+        show = show.rename(columns={"price_date": "가격일", "close": "종가", "sma_period": "SMA개월", "sma10": "SMA", "momentum12": "12개월모멘텀"})
         def trade_color(value):
             return "color:#dc2626;font-weight:700" if value > 1000 else ("color:#2563eb;font-weight:700" if value < -1000 else "")
         show_style = show.style.format({
-            "close": "{:,.0f}",
-            "sma10": "{:,.0f}",
-            "momentum12": "{:.2%}",
+            "종가": "{:,.0f}",
+            "SMA": "{:,.0f}",
+            "12개월모멘텀": "{:.2%}",
             "현재평가액": "{:,.0f}",
             "목표평가액": "{:,.0f}",
             "예상매매액": "{:,.0f}",
@@ -233,28 +311,26 @@ with tab_plan:
         st.dataframe(show_style, use_container_width=True, hide_index=True)
 
     st.markdown("### 실행 체크리스트")
-    actionable_plan = plan[pd.to_numeric(plan["예상매매액"], errors="coerce").abs() > 1000].copy()
+    actionable_plan = plan[(plan["티커"] != "CASH") & (pd.to_numeric(plan["예상매매액"], errors="coerce").abs() > 1000)].copy()
     if actionable_plan.empty:
         st.success("실행할 매매가 없습니다.")
     edited_plan = st.data_editor(
         actionable_plan, key="action_editor", use_container_width=True, hide_index=True,
-        disabled=[column for column in actionable_plan.columns if column not in {"실행", "실제수량", "메모"}],
+        disabled=[column for column in actionable_plan.columns if column not in {"실행", "실제수량", "실제체결금액", "메모"}],
         column_config={
             "실행": st.column_config.CheckboxColumn(),
             "예상매매액": st.column_config.NumberColumn(format="%,.0f원"),
             "현재평가액": st.column_config.NumberColumn(format="%,.0f원"),
+            "목표평가액": st.column_config.NumberColumn(format="%,.0f원"),
+            "실제수량": st.column_config.NumberColumn(min_value=0.0, format="%.4f", help="체결된 수량을 양수로 입력"),
+            "실제체결금액": st.column_config.NumberColumn(min_value=0.0, format="%,.0f원", help="수수료를 제외한 원화 기준 총 체결금액"),
         },
     )
     with st.expander("🛡️ 리밸런싱 실행 전 최종 점검"):
-        errors = []
-        if edited_plan.empty: errors.append("리밸런싱 계획이 없습니다.")
-        if (pd.to_numeric(view["close"], errors="coerce").fillna(0) <= 0).any(): errors.append("종가가 없는 종목이 있습니다.")
-        for code, group in view.groupby("strategy"):
-            rule_row = strategies[strategies["code"].astype(str) == str(code)]
-            rule_value = str(rule_row.iloc[0]["rule"]) if not rule_row.empty else "static"
-            if rule_value in {"static", "sma_filter_rebalance"}:
-                total_target = group["target_pct"].sum()
-                if abs(total_target-100) > .1: errors.append(f"{code}: 목표비중 합계가 {total_target:.1f}%입니다.")
+        errors = list(run_blockers)
+        checked = edited_plan[edited_plan["실행"].fillna(False).astype(bool)] if not edited_plan.empty else edited_plan
+        if not checked.empty and (pd.to_numeric(checked["실제수량"], errors="coerce").fillna(0) <= 0).any():
+            errors.append("실행 체크한 주문에는 실제수량을 입력해야 합니다.")
         if errors:
             for error in errors: st.warning(error)
         else:
@@ -337,6 +413,10 @@ with tab_settings:
         params["signal"] = signal
         params["threshold"] = st.number_input("발동 하락률", -0.90, 0.0, float(params.get("threshold", -.10)), .01, format="%.2f")
         if rule == "drawdown_buy":
+            stock_candidates = holdings[(holdings["strategy"].astype(str) == selected) & (holdings["ticker"].astype(str) != "CASH")]["ticker"].astype(str).tolist()
+            if stock_candidates:
+                current_stock = str(params.get("stock_ticker", stock_candidates[0]))
+                params["stock_ticker"] = st.selectbox("매수 대상 티커", stock_candidates, index=stock_candidates.index(current_stock) if current_stock in stock_candidates else 0)
             params["buy_fraction"] = st.slider("발동 시 현금 투입 비율", 0.0, 1.0, float(params.get("buy_fraction", .5)), .05)
         else:
             params["normal_stock_pct"] = st.slider("평시 주식비중(안내용)", 0, 100, int(params.get("normal_stock_pct", 70)))
@@ -430,7 +510,7 @@ with tab_history:
         irr_value, twr_value, sortino_value = xirr(equity, cashflows), twr(equity, cashflows), sortino(equity)
         m1, m2, m3, m4 = st.columns(4)
         fmt = lambda value: "—" if value is None else f"{value:.2%}"
-        m1.metric("CAGR", fmt(metrics["cagr"]))
+        m1.metric("평가액 CAGR", fmt(metrics["cagr"]))
         m2.metric("MDD", fmt(metrics["mdd"]))
         m3.metric("연환산 변동성", fmt(metrics["volatility"]))
         m4.metric("Sharpe", "—" if metrics["sharpe"] is None else f"{metrics['sharpe']:.2f}")
@@ -441,10 +521,11 @@ with tab_history:
 
         benchmark_text = st.text_input("비교 벤치마크", value=st.session_state.benchmarks, help="Yahoo Finance 티커를 쉼표로 구분")
         st.session_state.benchmarks = benchmark_text
-        compare, benchmark_warnings = comparison_history(snapshots_history, benchmark_text.split(","))
+        compare, benchmark_warnings = comparison_history(snapshots_history, benchmark_text.split(","), cashflows)
         for warning in benchmark_warnings:
             st.warning(warning)
         if not compare.empty:
+            st.caption("벤치마크 비교의 포트폴리오 선은 Cashflows의 입출금을 차감한 기간수익률을 연결합니다. 평가액 CAGR·MDD는 원금 증감이 포함된 잔고 기준입니다.")
             fig = px.line(compare, x="date", y="value", color="series", markers=True, labels={"value": "시작=100", "date": "기준일", "series": "비교"})
             st.plotly_chart(fig, use_container_width=True)
 
@@ -453,6 +534,21 @@ with tab_history:
         by_strategy = by_strategy.groupby(["date", "strategy"], as_index=False)["value"].sum()
         by_strategy["normalized"] = by_strategy.groupby("strategy")["value"].transform(lambda s: s / s.iloc[0] * 100 if len(s) and s.iloc[0] else s)
         st.plotly_chart(px.line(by_strategy, x="date", y="normalized", color="strategy", markers=True, labels={"normalized": "시작=100"}), use_container_width=True)
+
+        st.markdown("#### 자산군별 월말 히스토리")
+        asset_history = category_history(snapshots_history)
+        if not asset_history.empty:
+            st.plotly_chart(
+                px.area(asset_history, x="date", y="weight_pct", color="category",
+                        labels={"date": "기준일", "weight_pct": "전체 비중(%)", "category": "자산군"}),
+                use_container_width=True,
+            )
+            latest_asset_date = asset_history["date"].max()
+            latest_assets = asset_history[asset_history["date"] == latest_asset_date].copy()
+            st.dataframe(latest_assets, use_container_width=True, hide_index=True, column_config={
+                "value": st.column_config.NumberColumn("평가액", format="%,.0f원"),
+                "weight_pct": st.column_config.NumberColumn("전체 비중", format="%.1f%%"),
+            })
         strategy_metrics = []
         for code, group in snapshots_history.groupby("strategy"):
             eq_strategy, met = performance_summary(group)
@@ -483,41 +579,66 @@ with tab_history:
 
 with tab_export:
     st.subheader("Google Sheets 복사용 데이터")
-    st.caption("아래 코드 상자의 복사 아이콘을 누른 뒤 Google Sheets의 첫 셀에 붙여넣으세요.")
+    st.caption("Snapshots·Actions는 매월 아래쪽에 누적하고, Holdings·Strategies는 기존 표 전체를 교체합니다.")
+    include_header = st.checkbox("누적 표에 헤더 포함", value=False, help="시트를 처음 만들 때만 켜세요. 기존 표 아래에 추가할 때는 끕니다.")
     snapshots, actions = export_month(as_of, view, edited_plan, st.session_state.get("month_memo", ""))
+    category_month = export_category_month(as_of, view, st.session_state.get("month_memo", ""))
+    next_holdings, execution_warnings = next_holdings_after_execution(st.session_state.holdings, edited_plan, view)
 
-    st.markdown("#### 월말 스냅샷")
-    st.code(to_tsv(snapshots), language=None)
+    if run_blockers:
+        st.error("가격 또는 전략 설정 오류가 있어 이번 달 스냅샷과 액션 출력을 잠갔습니다.")
+        for issue in run_blockers:
+            st.warning(issue)
+    else:
+        st.markdown("#### 1 · 월말 스냅샷 — Snapshots 탭에 누적")
+        st.code(to_tsv(snapshots, include_header=include_header), language=None)
+        st.download_button(
+            "스냅샷 CSV 다운로드", to_csv_bytes(snapshots),
+            file_name=f"snapshots_{as_of.isoformat()}.csv", mime="text/csv",
+        )
+
+        st.markdown("#### 2 · 자산군 월별 요약 — 선택 기록")
+        st.caption("선진국 주식·신흥국 주식·채권·금·현금의 월별 평가액과 전체 비중입니다.")
+        st.code(to_tsv(category_month, include_header=include_header), language=None)
+
+        st.markdown("#### 3 · 액션 및 체결 이력 — Actions 탭에 누적")
+        if actions.empty:
+            st.info("이번 달 주문 대상이 없습니다. 장기보유 전략과 유지 종목은 스냅샷에만 기록됩니다.")
+        else:
+            st.code(to_tsv(actions, include_header=include_header), language=None)
+            st.download_button(
+                "액션 CSV 다운로드", to_csv_bytes(actions),
+                file_name=f"actions_{as_of.isoformat()}.csv", mime="text/csv",
+            )
+
+    st.markdown("#### 4 · 다음 달 보유내역 — Holdings 탭 전체 교체")
+    st.caption("실행 체크된 주문의 실제수량과 실제체결금액을 반영했습니다. 수수료·세금·잔여 현금은 아래 표에서 최종 확인해 수정하세요.")
+    for warning in execution_warnings:
+        st.warning(warning)
+    next_holdings_editor = st.data_editor(
+        next_holdings, key="next_holdings_editor", use_container_width=True, hide_index=True,
+        column_config={
+            "target_pct": st.column_config.NumberColumn(format="%.2f"),
+            "shares": st.column_config.NumberColumn(min_value=0.0, format="%.4f"),
+        },
+    )
+    st.code(to_tsv(next_holdings_editor), language=None)
     st.download_button(
-        "스냅샷 CSV 다운로드", to_csv_bytes(snapshots),
-        file_name=f"snapshots_{as_of.isoformat()}.csv", mime="text/csv",
+        "다음 달 Holdings CSV 다운로드", to_csv_bytes(next_holdings_editor),
+        file_name=f"holdings_after_{as_of.isoformat()}.csv", mime="text/csv",
     )
 
-    st.markdown("#### 액션 및 실행 이력")
-    st.code(to_tsv(actions), language=None)
-    st.download_button(
-        "액션 CSV 다운로드", to_csv_bytes(actions),
-        file_name=f"actions_{as_of.isoformat()}.csv", mime="text/csv",
-    )
-
-    st.markdown("#### 현재 보유내역")
-    st.code(to_tsv(st.session_state.holdings), language=None)
-    st.download_button(
-        "보유내역 CSV 다운로드", to_csv_bytes(st.session_state.holdings),
-        file_name="holdings.csv", mime="text/csv",
-    )
-
-    st.markdown("#### 전략 설정")
+    st.markdown("#### 5 · 전략 설정 — Strategies 탭 전체 교체")
     st.code(to_tsv(st.session_state.strategies), language=None)
     st.download_button(
         "전략 설정 CSV 다운로드", to_csv_bytes(st.session_state.strategies),
         file_name="strategies.csv", mime="text/csv",
     )
 
-    st.markdown("#### 입출금 원장")
+    st.markdown("#### 입출금 원장 — Cashflows 탭 전체 교체")
     st.code(to_tsv(st.session_state.cashflows), language=None)
     st.download_button("입출금 CSV 다운로드", to_csv_bytes(st.session_state.cashflows), file_name="cashflows.csv", mime="text/csv")
 
-    st.markdown("#### 자산군 목표비중")
+    st.markdown("#### 자산군 목표비중 — CategoryTargets 탭 전체 교체")
     st.code(to_tsv(st.session_state.category_targets), language=None)
     st.download_button("자산군 목표 CSV 다운로드", to_csv_bytes(st.session_state.category_targets), file_name="category_targets.csv", mime="text/csv")
