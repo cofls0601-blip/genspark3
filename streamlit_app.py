@@ -222,7 +222,15 @@ with tab_plan:
         show = group[["티커", "종목", "close", "sma10", "momentum12", "현재평가액", "목표평가액", "예상매매액", "근거"]].copy()
         def trade_color(value):
             return "color:#dc2626;font-weight:700" if value > 1000 else ("color:#2563eb;font-weight:700" if value < -1000 else "")
-        st.dataframe(show.style.map(trade_color, subset=["예상매매액"]), use_container_width=True, hide_index=True)
+        show_style = show.style.format({
+            "close": "{:,.0f}",
+            "sma10": "{:,.0f}",
+            "momentum12": "{:.2%}",
+            "현재평가액": "{:,.0f}",
+            "목표평가액": "{:,.0f}",
+            "예상매매액": "{:,.0f}",
+        }, na_rep="—").map(trade_color, subset=["예상매매액"])
+        st.dataframe(show_style, use_container_width=True, hide_index=True)
 
     st.markdown("### 실행 체크리스트")
     actionable_plan = plan[pd.to_numeric(plan["예상매매액"], errors="coerce").abs() > 1000].copy()
@@ -450,7 +458,14 @@ with tab_history:
             eq_strategy, met = performance_summary(group)
             strategy_metrics.append({"전략": code, "CAGR": met["cagr"], "MDD": met["mdd"], "변동성": met["volatility"], "Sharpe": met["sharpe"]})
         st.dataframe(pd.DataFrame(strategy_metrics), use_container_width=True, hide_index=True)
-        st.dataframe(snapshots_history.sort_values("date", ascending=False), use_container_width=True, hide_index=True)
+        st.dataframe(
+            snapshots_history.sort_values("date", ascending=False),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "close": st.column_config.NumberColumn("종가", format="%,.0f"),
+            },
+        )
         if not actions_history.empty:
             st.markdown("#### 실행 이력")
             st.dataframe(actions_history.sort_values("date", ascending=False), use_container_width=True, hide_index=True)
