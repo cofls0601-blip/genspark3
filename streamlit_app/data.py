@@ -10,8 +10,8 @@ import pandas as pd
 
 HOLDING_COLUMNS = ["strategy", "account", "ticker", "name", "market", "category", "role", "target_pct", "shares"]
 STRATEGY_COLUMNS = ["code", "account", "description", "dynamic", "active", "annual_limit", "rule", "params_json"]
-SNAPSHOT_COLUMNS = ["date", "saved_at", "strategy", "account", "ticker", "name", "category", "close", "shares", "value", "weight_pct", "target_pct", "memo"]
-ACTION_COLUMNS = ["date", "saved_at", "strategy", "ticker", "name", "side", "planned_shares", "actual_shares", "planned_amount", "done", "reason", "memo"]
+SNAPSHOT_COLUMNS = ["date", "saved_at", "strategy", "account", "ticker", "name", "category", "price_date", "close", "fx", "shares", "value", "weight_pct", "target_pct", "memo"]
+ACTION_COLUMNS = ["date", "saved_at", "strategy", "ticker", "name", "side", "planned_shares", "actual_shares", "actual_amount", "planned_amount", "done", "reason", "memo"]
 CASHFLOW_COLUMNS = ["date", "amount", "memo", "strategy"]
 CATEGORY_TARGET_COLUMNS = ["category", "target_pct"]
 
@@ -29,7 +29,8 @@ def normalize_holdings(frame: pd.DataFrame) -> pd.DataFrame:
         df[column] = df[column].fillna("").astype(str).str.strip()
     df["market"] = df["market"].str.upper().replace("", "KR")
     raw = df["ticker"].str.replace(r"\.0$", "", regex=True)
-    is_kr_code = df["market"].eq("KR") & raw.ne("") & raw.ne("CASH")
+    raw = raw.mask(raw.str.upper().eq("CASH"), "CASH")
+    is_kr_code = df["market"].eq("KR") & raw.str.fullmatch(r"\d+")
     df["ticker"] = raw.where(~is_kr_code, raw.str.zfill(6))
     for column in ["target_pct", "shares"]:
         df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0.0)
@@ -92,8 +93,12 @@ def read_public_google_sheet(url: str, kind: str = "holdings", sheet_name: str |
 def read_optional_sheet(url: str, sheet_name: str, columns: list[str]) -> pd.DataFrame:
     try:
         frame = pd.read_csv(_google_csv_url(url, sheet_name), dtype={"ticker": str})
-        if not set(columns).issubset(frame.columns):
+        if frame.empty and not len(frame.columns):
             return pd.DataFrame(columns=columns)
+        # New optional fields are added without making existing user sheets unreadable.
+        for column in columns:
+            if column not in frame.columns:
+                frame[column] = ""
         return frame.reindex(columns=columns)
     except Exception:
         return pd.DataFrame(columns=columns)
@@ -131,18 +136,84 @@ def export_month(as_of: date, view: pd.DataFrame, plan: pd.DataFrame, memo: str)
     snapshots = pd.DataFrame({
         "date": as_of.isoformat(), "saved_at": stamp,
         "strategy": view["strategy"], "account": view["account"], "ticker": view["ticker"],
-        "name": view["name"], "category": view["category"], "close": view["close"],
+        "name": view["name"], "category": view["category"],
+        "price_date": view["price_date"], "close": view["close"], "fx": view["fx"],
         "shares": view["shares"], "value": view["평가액"], "weight_pct": view["전체비중"],
         "target_pct": view["target_pct"], "memo": memo,
     }).reindex(columns=SNAPSHOT_COLUMNS)
+    actual_amount = plan["실제체결금액"] if "실제체결금액" in plan else 0.0
     actions = pd.DataFrame({
         "date": as_of.isoformat(), "saved_at": stamp, "strategy": plan["전략"],
         "ticker": plan["티커"], "name": plan["종목"], "side": plan["구분"],
         "planned_shares": plan["제안수량"], "actual_shares": plan["실제수량"],
+        "actual_amount": actual_amount,
         "planned_amount": plan["예상매매액"], "done": plan["실행"],
         "reason": plan["근거"], "memo": plan["메모"],
     }).reindex(columns=ACTION_COLUMNS)
     return snapshots, actions
+
+
+def export_category_month(as_of: date, view: pd.DataFrame, memo: str) -> pd.DataFrame:
+    columns = ["date", "category", "value", "weight_pct", "memo"]
+    if view.empty:
+        return pd.DataFrame(columns=columns)
+    grouped = view.groupby("category", as_index=False)["평가액"].sum().rename(columns={"평가액": "value"})
+    total = float(grouped["value"].sum())
+    grouped["date"] = as_of.isoformat()
+    grouped["weight_pct"] = grouped["value"] / total * 100 if total > 0 else 0.0
+    grouped["memo"] = memo
+    return grouped.reindex(columns=columns)
+
+
+def next_holdings_after_execution(holdings: pd.DataFrame, executed_plan: pd.DataFrame,
+                                  view: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Create next month's holdings from checked executions.
+
+    Actual quantity is entered as a positive number. Cash is adjusted by the
+    actual KRW amount, or by the latest KRW unit price when that amount is blank.
+    """
+    next_holdings = normalize_holdings(holdings)
+    warnings: list[str] = []
+    if executed_plan.empty:
+        return next_holdings, warnings
+    price_lookup = {
+        (str(row.strategy), str(row.ticker)): float(row.close) * float(row.fx)
+        for row in view.itertuples()
+    }
+    cash_delta: dict[str, float] = {}
+    for row in executed_plan.itertuples():
+        if not bool(getattr(row, "실행", False)) or str(row.티커) == "CASH":
+            continue
+        qty = abs(float(getattr(row, "실제수량", 0) or 0))
+        if qty <= 0:
+            warnings.append(f"{row.전략}/{row.티커}: 실행 체크됐지만 실제수량이 없어 반영하지 않았습니다.")
+            continue
+        mask = next_holdings["strategy"].astype(str).eq(str(row.전략)) & next_holdings["ticker"].astype(str).eq(str(row.티커))
+        if not mask.any():
+            warnings.append(f"{row.전략}/{row.티커}: 보유내역에서 종목을 찾지 못했습니다.")
+            continue
+        sign = 1.0 if str(row.구분) == "매수" else -1.0
+        current = float(next_holdings.loc[mask, "shares"].iloc[0])
+        updated = current + sign * qty
+        if updated < -1e-9:
+            warnings.append(f"{row.전략}/{row.티커}: 보유수량보다 많이 매도할 수 없습니다.")
+            continue
+        next_holdings.loc[mask, "shares"] = max(0.0, updated)
+        actual_amount = abs(float(getattr(row, "실제체결금액", 0) or 0))
+        if actual_amount <= 0:
+            actual_amount = qty * price_lookup.get((str(row.전략), str(row.티커)), 0.0)
+        cash_delta[str(row.전략)] = cash_delta.get(str(row.전략), 0.0) - sign * actual_amount
+    for strategy, delta in cash_delta.items():
+        mask = next_holdings["strategy"].astype(str).eq(strategy) & next_holdings["ticker"].astype(str).eq("CASH")
+        if not mask.any():
+            warnings.append(f"{strategy}: CASH 행이 없어 체결금액 {delta:+,.0f}원을 반영하지 못했습니다.")
+            continue
+        current_cash = float(next_holdings.loc[mask, "shares"].iloc[0])
+        updated_cash = current_cash + delta
+        if updated_cash < -1:
+            warnings.append(f"{strategy}: 체결 반영 후 현금이 {updated_cash:,.0f}원으로 음수가 됩니다.")
+        next_holdings.loc[mask, "shares"] = max(0.0, updated_cash)
+    return next_holdings, warnings
 
 
 def to_tsv(frame: pd.DataFrame, include_header: bool = True) -> str:
